@@ -4,7 +4,6 @@ import models
 from auth import get_password_hash
 
 def seed_db():
-    # Reset Database
     print("Dropping existing tables and recreating database schema...")
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
@@ -22,7 +21,7 @@ def seed_db():
         print(f"Created Studio A: '{studio_a.name}' (ID: {studio_a.id})")
         print(f"Created Studio B: '{studio_b.name}' (ID: {studio_b.id})")
 
-        # 2. Create Users (hashed passwords)
+        # 2. Create Users
         hashed_pwd = get_password_hash("password123")
         
         user_a = models.User(
@@ -43,7 +42,7 @@ def seed_db():
         db.add_all([user_a, user_b])
         db.flush()
 
-        # 3. Create Clients for Studio A
+        # 3. Create Clients
         client_a1 = models.Client(
             studio_id=studio_a.id,
             name="Alice Johnson",
@@ -60,8 +59,6 @@ def seed_db():
             source="Referral",
             preferences={"style": "Moody & Cinematic", "notes": "Wants a dark studio background."}
         )
-
-        # Create Clients for Studio B
         client_b1 = models.Client(
             studio_id=studio_b.id,
             name="Charlie Smith",
@@ -70,12 +67,10 @@ def seed_db():
             source="Google Search",
             preferences={"style": "Clean Editorial", "notes": "Corporate headshots for resume."}
         )
-        
         db.add_all([client_a1, client_a2, client_b1])
         db.flush()
 
-        # 4. Create Bookings for Studio A
-        # Upcoming Wedding for Alice (10 days from now)
+        # 4. Create Bookings
         booking_a1 = models.Booking(
             studio_id=studio_a.id,
             client_id=client_a1.id,
@@ -86,7 +81,6 @@ def seed_db():
             price=3200.0,
             notes="Full-day wedding photography. Second shooter assigned."
         )
-        # Past Portrait for Bob (2 days ago)
         booking_a2 = models.Booking(
             studio_id=studio_a.id,
             client_id=client_a2.id,
@@ -97,9 +91,6 @@ def seed_db():
             price=450.0,
             notes="Family outdoor portrait session at Golden Hour."
         )
-
-        # Create Bookings for Studio B
-        # Upcoming Corporate Headshot for Charlie (5 days from now)
         booking_b1 = models.Booking(
             studio_id=studio_b.id,
             client_id=client_b1.id,
@@ -108,9 +99,8 @@ def seed_db():
             duration_minutes=60,
             status="Confirmed",
             price=299.0,
-            notes="Requires solid gray backdrop and fast delivery."
+            notes="Requires solid gray backdrop."
         )
-
         db.add_all([booking_a1, booking_a2, booking_b1])
         db.flush()
 
@@ -142,12 +132,10 @@ def seed_db():
             status="Paid",
             due_at=datetime.datetime.utcnow() + datetime.timedelta(days=2)
         )
-
         db.add_all([invoice_a1, invoice_a2, invoice_b1])
         db.flush()
 
-        # 6. Create Gallery for Studio A
-        # Past portrait gallery for Bob
+        # 6. Create Galleries
         gallery_a2 = models.Gallery(
             studio_id=studio_a.id,
             booking_id=booking_a2.id,
@@ -158,29 +146,75 @@ def seed_db():
         db.add(gallery_a2)
         db.flush()
 
-        # 7. Add Photos to Gallery A2
+        # Add Photos
         mock_photos = [
-            {"orig": "https://images.unsplash.com/photo-1511285560929-80b456fea0bc?q=80&w=1200", "ed": "https://images.unsplash.com/photo-1511285560929-80b456fea0bc?q=80&w=1200&auto=format&fit=crop&sat=-20&contrast=15", "tags": ["Family", "Outdoors", "Golden Hour"]},
-            {"orig": "https://images.unsplash.com/photo-1519741497674-611481863552?q=80&w=1200", "ed": "https://images.unsplash.com/photo-1519741497674-611481863552?q=80&w=1200&auto=format&fit=crop&sat=-10&contrast=10", "tags": ["Portrait", "Kids"]},
-            {"orig": "https://images.unsplash.com/photo-1465495976277-4387d4b0b4c6?q=80&w=1200", "ed": "https://images.unsplash.com/photo-1465495976277-4387d4b0b4c6?q=80&w=1200&auto=format&fit=crop&sepia=10", "tags": ["Candid", "Outdoors"]},
+            {"orig": "https://images.unsplash.com/photo-1511285560929-80b456fea0bc?q=80&w=1200", "tags": ["Family", "Outdoors", "Golden Hour"]},
+            {"orig": "https://images.unsplash.com/photo-1519741497674-611481863552?q=80&w=1200", "tags": ["Portrait", "Kids"]},
         ]
-
         for p_data in mock_photos:
             p = models.Photo(
                 gallery_id=gallery_a2.id,
                 original_url=p_data["orig"],
-                edited_url=p_data["ed"],
+                edited_url=p_data["orig"] + "&auto=format&fit=crop&sat=-15",
                 is_selected=False,
                 ai_tags=p_data["tags"]
             )
             db.add(p)
 
-        db.commit()
-        print("Database successfully seeded with multi-tenant mock data!")
-        print("Logins created:")
-        print(" - Aura Photography: owner@aura.com / password123")
-        print(" - Vogue Studios: owner@vogue.com / password123")
+        # 7. Create Contracts
+        contract_a1 = models.Contract(
+            studio_id=studio_a.id,
+            booking_id=booking_a1.id,
+            client_id=client_a1.id,
+            title="Standard Wedding Photography Agreement",
+            content="This agreement outline terms for the standard wedding day coverage. The photographer reserves artistic license. Balance is due 5 days before the event.",
+            status="Sent"
+        )
+        contract_a2 = models.Contract(
+            studio_id=studio_a.id,
+            booking_id=booking_a2.id,
+            client_id=client_a2.id,
+            title="Model Release & Styling Form",
+            content="Permits the photographer to publish selected outdoor family portraits in portfolios and campaigns.",
+            status="Signed",
+            signature_name="Bob Miller",
+            signed_at=datetime.datetime.utcnow() - datetime.timedelta(days=2),
+            ip_address="192.168.1.50",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            document_hash="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        )
+        db.add_all([contract_a1, contract_a2])
+        db.flush()
 
+        # 8. Create Message Logs
+        msg_a1_1 = models.MessageLog(
+            studio_id=studio_a.id,
+            client_id=client_a1.id,
+            subject="Intake Form Completed",
+            body="Welcome Alice! Your preferences style is set to 'Bright & Airy'.",
+            channel="Email",
+            status="Sent"
+        )
+        msg_a1_2 = models.MessageLog(
+            studio_id=studio_a.id,
+            client_id=client_a1.id,
+            subject="Contract ready for review",
+            body="Please sign the Wedding Contract link inside your client portal.",
+            channel="Email",
+            status="Sent"
+        )
+        msg_a2_1 = models.MessageLog(
+            studio_id=studio_a.id,
+            client_id=client_a2.id,
+            subject="Shoot day details",
+            body="Bob, just a reminder for your Golden Hour portrait shoot tomorrow.",
+            channel="SMS",
+            status="Sent"
+        )
+        db.add_all([msg_a1_1, msg_a1_2, msg_a2_1])
+
+        db.commit()
+        print("Database successfully seeded with multi-tenant mock data and security logs!")
     except Exception as e:
         db.rollback()
         print(f"Error during seeding: {e}")

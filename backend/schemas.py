@@ -142,6 +142,45 @@ class GalleryResponse(GalleryBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+# ----------------- Contract Schemas -----------------
+class ContractBase(BaseModel):
+    booking_id: str
+    client_id: str
+    title: str
+    content: str
+    status: Optional[str] = "Draft"
+    signature_name: Optional[str] = None
+    signed_at: Optional[datetime] = None
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    document_hash: Optional[str] = None
+
+class ContractCreate(ContractBase):
+    pass
+
+class ContractResponse(ContractBase):
+    id: str
+    studio_id: str
+    created_at: datetime
+    client: Optional[ClientResponse] = None
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ----------------- Message Log Schemas -----------------
+class MessageLogBase(BaseModel):
+    client_id: str
+    subject: str
+    body: str
+    channel: str = "Email"
+    status: str = "Sent"
+
+class MessageLogResponse(MessageLogBase):
+    id: str
+    studio_id: str
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
 # ----------------- Dashboard Stats Schemas -----------------
 class BookingBrief(BaseModel):
     id: str

@@ -20,6 +20,8 @@ class Studio(Base):
     bookings = relationship("Booking", back_populates="studio", cascade="all, delete-orphan")
     invoices = relationship("Invoice", back_populates="studio", cascade="all, delete-orphan")
     galleries = relationship("Gallery", back_populates="studio", cascade="all, delete-orphan")
+    contracts = relationship("Contract", back_populates="studio", cascade="all, delete-orphan")
+    message_logs = relationship("MessageLog", back_populates="studio", cascade="all, delete-orphan")
 
 
 class User(Base):
@@ -53,6 +55,8 @@ class Client(Base):
     studio = relationship("Studio", back_populates="clients")
     bookings = relationship("Booking", back_populates="client", cascade="all, delete-orphan")
     invoices = relationship("Invoice", back_populates="client", cascade="all, delete-orphan")
+    contracts = relationship("Contract", back_populates="client", cascade="all, delete-orphan")
+    message_logs = relationship("MessageLog", back_populates="client", cascade="all, delete-orphan")
 
 
 class Booking(Base):
@@ -74,6 +78,7 @@ class Booking(Base):
     client = relationship("Client", back_populates="bookings")
     invoices = relationship("Invoice", back_populates="booking", cascade="all, delete-orphan")
     galleries = relationship("Gallery", back_populates="booking", cascade="all, delete-orphan")
+    contracts = relationship("Contract", back_populates="booking", cascade="all, delete-orphan")
 
 
 class Invoice(Base):
@@ -125,3 +130,43 @@ class Photo(Base):
 
     # Relationships
     gallery = relationship("Gallery", back_populates="photos")
+
+
+class Contract(Base):
+    __tablename__ = "contracts"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    studio_id = Column(String, ForeignKey("studios.id"), nullable=False)
+    booking_id = Column(String, ForeignKey("bookings.id"), nullable=False)
+    client_id = Column(String, ForeignKey("clients.id"), nullable=False)
+    title = Column(String, nullable=False)
+    content = Column(String, nullable=False)
+    status = Column(String, default="Draft") # Draft, Sent, Signed
+    signature_name = Column(String, nullable=True)
+    signed_at = Column(DateTime, nullable=True)
+    ip_address = Column(String, nullable=True)
+    user_agent = Column(String, nullable=True)
+    document_hash = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    # Relationships
+    studio = relationship("Studio", back_populates="contracts")
+    booking = relationship("Booking", back_populates="contracts")
+    client = relationship("Client", back_populates="contracts")
+
+
+class MessageLog(Base):
+    __tablename__ = "message_logs"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    studio_id = Column(String, ForeignKey("studios.id"), nullable=False)
+    client_id = Column(String, ForeignKey("clients.id"), nullable=False)
+    subject = Column(String, nullable=False)
+    body = Column(String, nullable=False)
+    channel = Column(String, default="Email") # Email, SMS
+    status = Column(String, default="Sent") # Sent, Failed
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    # Relationships
+    studio = relationship("Studio", back_populates="message_logs")
+    client = relationship("Client", back_populates="message_logs")

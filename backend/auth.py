@@ -58,3 +58,36 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 
 def get_current_studio_id(current_user: models.User = Depends(get_current_user)) -> str:
     return current_user.studio_id
+
+# ----------------- Secure Client Portal Expiring Tokens -----------------
+
+def create_portal_share_token(client_id: str, expires_days: int = 30) -> str:
+    """
+    Generates a secure, signed, and expiring JWT token for a specific client portal.
+    """
+    expire = datetime.datetime.utcnow() + datetime.timedelta(days=expires_days)
+    payload = {
+        "sub": client_id,
+        "type": "portal_access",
+        "exp": expire
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+def get_portal_client_id(token: str) -> str:
+    """
+    Decodes the client portal token. Returns client_id if valid, raises 401 otherwise.
+    """
+    unauthorized_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Client portal link is invalid or has expired."
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") != "portal_access":
+            raise unauthorized_exception
+        client_id: str = payload.get("sub")
+        if client_id is None:
+            raise unauthorized_exception
+        return client_id
+    except jwt.PyJWTError:
+        raise unauthorized_exception

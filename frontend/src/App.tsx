@@ -6,6 +6,8 @@ import Dashboard from './pages/Dashboard';
 import Clients from './pages/Clients';
 import Bookings from './pages/Bookings';
 import Invoices from './pages/Invoices';
+import Contracts from './pages/Contracts';
+import PhotoUpload from './pages/PhotoUpload';
 import ClientPortal from './pages/ClientPortal';
 import GalleryProofing from './pages/GalleryProofing';
 
@@ -46,6 +48,8 @@ const DashboardLayout: React.FC = () => {
     { path: '/dashboard/clients', label: 'Clients', icon: <Users size={20} /> },
     { path: '/dashboard/bookings', label: 'Calendar', icon: <Calendar size={20} /> },
     { path: '/dashboard/invoices', label: 'Invoicing', icon: <FileText size={20} /> },
+    { path: '/dashboard/contracts', label: 'Contracts', icon: <FileText size={20} /> },
+    { path: '/dashboard/upload', label: 'Uploads', icon: <Camera size={20} /> },
   ];
 
   return (
@@ -105,6 +109,8 @@ const DashboardLayout: React.FC = () => {
           <Route path="/clients" element={<Clients />} />
           <Route path="/bookings" element={<Bookings />} />
           <Route path="/invoices" element={<Invoices />} />
+          <Route path="/contracts" element={<Contracts />} />
+          <Route path="/upload" element={<PhotoUpload />} />
         </Routes>
       </main>
     </div>

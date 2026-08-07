@@ -112,11 +112,21 @@ const Clients: React.FC = () => {
     }
   };
 
-  const copyPortalLink = (clientId: string) => {
-    const link = `${window.location.origin}/portal/${clientId}`;
-    navigator.clipboard.writeText(link);
-    setCopiedId(clientId);
-    setTimeout(() => setCopiedId(null), 2000);
+  const copyPortalLink = async (clientId: string) => {
+    try {
+      const res = await fetch(`/api/clients/${clientId}/token`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const link = `${window.location.origin}/portal/${clientId}?token=${data.token}`;
+        navigator.clipboard.writeText(link);
+        setCopiedId(clientId);
+        setTimeout(() => setCopiedId(null), 2000);
+      }
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   return (
@@ -265,16 +275,26 @@ const Clients: React.FC = () => {
                 </div>
 
                 <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1.25rem', marginTop: '0.5rem' }}>
-                  <a 
-                    href={`/portal/${selectedClient.id}`} 
-                    target="_blank" 
-                    rel="noreferrer" 
+                  <button 
+                    onClick={async () => {
+                      try {
+                        const res = await fetch(`/api/clients/${selectedClient.id}/token`, {
+                          headers: { 'Authorization': `Bearer ${token}` }
+                        });
+                        if (res.ok) {
+                          const data = await res.json();
+                          window.open(`/portal/${selectedClient.id}?token=${data.token}`, '_blank');
+                        }
+                      } catch (err) {
+                        console.error(err);
+                      }
+                    }}
                     className="btn btn-secondary" 
-                    style={{ width: '100%', display: 'flex', gap: '0.5rem', justifyContent: 'center' }}
+                    style={{ width: '100%', display: 'flex', gap: '0.5rem', justifyContent: 'center', cursor: 'pointer' }}
                   >
                     <span>View Client Portal</span>
                     <ExternalLink size={16} />
-                  </a>
+                  </button>
                 </div>
               </div>
             </div>

@@ -33,6 +33,9 @@ interface GalleryData {
 const GalleryProofing: React.FC = () => {
   const { clientId, galleryId } = useParams<{ clientId: string; galleryId: string }>();
 
+  // Extract signed JWT token from URL query parameters
+  const token = new URLSearchParams(window.location.search).get('token') || '';
+
   const [gallery, setGallery] = useState<GalleryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [activePhoto, setActivePhoto] = useState<Photo | null>(null);
@@ -42,7 +45,7 @@ const GalleryProofing: React.FC = () => {
 
   const fetchGallery = async () => {
     try {
-      const response = await fetch(`/api/public/galleries/${galleryId}`);
+      const response = await fetch(`/api/public/galleries/${galleryId}?token=${encodeURIComponent(token)}`);
       if (response.ok) {
         const data = await response.json();
         setGallery(data);
@@ -64,14 +67,16 @@ const GalleryProofing: React.FC = () => {
   };
 
   useEffect(() => {
-    if (galleryId) {
+    if (galleryId && token) {
       fetchGallery();
+    } else {
+      setLoading(false);
     }
-  }, [galleryId]);
+  }, [galleryId, token]);
 
   const toggleFavorite = async (photoId: string) => {
     try {
-      const response = await fetch(`/api/public/photos/${photoId}/favorite`, {
+      const response = await fetch(`/api/public/photos/${photoId}/favorite?token=${encodeURIComponent(token)}`, {
         method: 'POST'
       });
       if (response.ok) {
@@ -110,9 +115,9 @@ const GalleryProofing: React.FC = () => {
           <Camera size={32} color="var(--accent-red)" style={{ marginBottom: '1rem' }} />
           <h2 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Gallery Not Found</h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
-            The requested gallery links do not exist or have been archived by the photographer.
+            The requested gallery links do not exist, require authentication, or have been archived by the photographer.
           </p>
-          <Link to={`/portal/${clientId}`} className="btn btn-secondary">Return to portal</Link>
+          <Link to={`/portal/${clientId}?token=${encodeURIComponent(token)}`} className="btn btn-secondary">Return to portal</Link>
         </div>
       </div>
     );
@@ -141,7 +146,7 @@ const GalleryProofing: React.FC = () => {
         alignItems: 'center'
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <Link to={`/portal/${clientId}`} style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center' }}>
+          <Link to={`/portal/${clientId}?token=${encodeURIComponent(token)}`} style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center' }}>
             <ChevronLeft size={22} />
           </Link>
           <div>
@@ -232,7 +237,7 @@ const GalleryProofing: React.FC = () => {
                   </div>
                 )}
 
-                {/* Heart and View Actions overlay */}
+                {/* Heart Action overlay */}
                 <div style={{
                   position: 'absolute',
                   right: '0.75rem',
@@ -286,7 +291,7 @@ const GalleryProofing: React.FC = () => {
               <X size={28} />
             </button>
 
-            {/* Main Image Slider with Before/After preview option */}
+            {/* Main Image Slider */}
             <div style={{ position: 'relative', width: '100%', background: '#000', borderRadius: 'var(--radius-md)', overflow: 'hidden', boxShadow: '0 10px 40px rgba(0,0,0,0.5)' }}>
               <img 
                 src={activePhoto.edited_url || activePhoto.original_url} 
