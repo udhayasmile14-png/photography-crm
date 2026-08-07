@@ -8,6 +8,8 @@ import Bookings from './pages/Bookings';
 import Invoices from './pages/Invoices';
 import Contracts from './pages/Contracts';
 import PhotoUpload from './pages/PhotoUpload';
+import Weddings from './pages/Weddings';
+import GuestPortal from './pages/GuestPortal';
 import ClientPortal from './pages/ClientPortal';
 import GalleryProofing from './pages/GalleryProofing';
 
@@ -18,23 +20,15 @@ import {
   Calendar, 
   FileText, 
   LogOut, 
-  UserCircle 
+  UserCircle,
+  Heart
 } from 'lucide-react';
 
 import './styles/theme.css';
 
 // Guard for protected Studio Dashboard routes
 const PrivateRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isAuthenticated, isLoading } = useAuth();
-  
-  if (isLoading) {
-    return (
-      <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center', backgroundColor: 'var(--bg-app)' }}>
-        <div style={{ color: 'var(--text-secondary)', fontFamily: 'var(--font-display)', fontSize: '1.25rem' }}>Loading Aperture...</div>
-      </div>
-    );
-  }
-  
+  const { isAuthenticated } = useAuth();
   return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
 };
 
@@ -47,6 +41,7 @@ const DashboardLayout: React.FC = () => {
     { path: '/dashboard', label: 'Overview', icon: <LayoutDashboard size={20} /> },
     { path: '/dashboard/clients', label: 'Clients', icon: <Users size={20} /> },
     { path: '/dashboard/bookings', label: 'Calendar', icon: <Calendar size={20} /> },
+    { path: '/dashboard/weddings', label: 'Weddings', icon: <Heart size={20} /> },
     { path: '/dashboard/invoices', label: 'Invoicing', icon: <FileText size={20} /> },
     { path: '/dashboard/contracts', label: 'Contracts', icon: <FileText size={20} /> },
     { path: '/dashboard/upload', label: 'Uploads', icon: <Camera size={20} /> },
@@ -111,6 +106,7 @@ const DashboardLayout: React.FC = () => {
           <Route path="/invoices" element={<Invoices />} />
           <Route path="/contracts" element={<Contracts />} />
           <Route path="/upload" element={<PhotoUpload />} />
+          <Route path="/weddings" element={<Weddings />} />
         </Routes>
       </main>
     </div>
@@ -119,17 +115,10 @@ const DashboardLayout: React.FC = () => {
 
 const App: React.FC = () => {
   return (
-    <AuthProvider>
-      <BrowserRouter>
+    <BrowserRouter>
+      <AuthProvider>
         <Routes>
-          {/* Public Authentication */}
           <Route path="/login" element={<Login />} />
-
-          {/* Client-Facing Portals (Public sharing URLs) */}
-          <Route path="/portal/:clientId" element={<ClientPortal />} />
-          <Route path="/portal/:clientId/gallery/:galleryId" element={<GalleryProofing />} />
-
-          {/* Private Studio CRM routes */}
           <Route 
             path="/dashboard/*" 
             element={
@@ -138,12 +127,16 @@ const App: React.FC = () => {
               </PrivateRoute>
             } 
           />
-
-          {/* Fallbacks */}
+          {/* Public Portal Routes */}
+          <Route path="/portal/:clientId" element={<ClientPortal />} />
+          <Route path="/portal/:clientId/gallery/:galleryId" element={<GalleryProofing />} />
+          <Route path="/public/wedding/:bookingId/guest-upload" element={<GuestPortal />} />
+          
+          {/* Fallback */}
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
-      </BrowserRouter>
-    </AuthProvider>
+      </AuthProvider>
+    </BrowserRouter>
   );
 };
 

@@ -56,6 +56,8 @@ class ClientBase(BaseModel):
     phone: Optional[str] = None
     source: Optional[str] = None
     preferences: Optional[Any] = None
+    face_recognition_consent: Optional[bool] = False
+    face_embedding: Optional[List[float]] = None
 
 class ClientCreate(ClientBase):
     pass
@@ -115,6 +117,9 @@ class PhotoBase(BaseModel):
     edited_url: Optional[str] = None
     is_selected: Optional[bool] = False
     ai_tags: Optional[List[str]] = None
+    matched_clients: Optional[List[str]] = None
+    uploaded_by_guest: Optional[str] = None
+    is_guest_uploaded: Optional[bool] = False
 
 class PhotoResponse(PhotoBase):
     id: str

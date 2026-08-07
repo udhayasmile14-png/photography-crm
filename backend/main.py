@@ -643,7 +643,9 @@ def get_secure_client_portal_data(
         "client": {
             "id": client.id,
             "name": client.name,
-            "email": client.email
+            "email": client.email,
+            "face_recognition_consent": client.face_recognition_consent,
+            "has_face_embedding": client.face_embedding is not None
         },
         "studio_name": studio_name,
         "bookings": [
@@ -808,3 +810,164 @@ def sign_contract(
     )
 
     return contract
+
+
+@app.post("/api/public/clients/register-face")
+async def register_client_face(
+    token: str = Query(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _ = Depends(public_limiter)
+):
+    # 1. Verify token and find client
+    client_id = auth.get_portal_client_id(token)
+    client = db.query(models.Client).filter(models.Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    # 2. Cap file size to 5MB
+    MAX_FILE_SIZE = 5 * 1024 * 1024
+    contents = await file.read()
+    if len(contents) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="File too large. Maximum size is 5MB.")
+
+    # 3. Verify magic bytes (JPEGs and PNGs only)
+    is_jpeg = contents.startswith(b'\xff\xd8\xff')
+    is_png = contents.startswith(b'\x89PNG\r\n\x1a\n')
+    if not is_jpeg and not is_png:
+        raise HTTPException(status_code=400, detail="Invalid image format. Only JPEGs and PNGs are accepted.")
+
+    # 4. Generate stable, mock 128-dimensional face embedding vector
+    import hashlib
+    import math
+    h = hashlib.sha256(f"{client.id}-{file.filename}".encode("utf-8")).digest()
+
+    raw_vector = []
+    vector_sum = 0.0
+    for i in range(128):
+        byte_val = h[i % len(h)]
+        val = math.sin(byte_val + i) # Generate floats between -1 and 1
+        raw_vector.append(val)
+        vector_sum += val * val
+
+    # Normalize vector to unit length for standard cosine/L2 distance math
+    norm = math.sqrt(vector_sum)
+    normalized_vector = [val / norm for val in raw_vector]
+
+    # 5. Save consent and vector embedding
+    client.face_recognition_consent = True
+    client.face_embedding = normalized_vector
+    db.commit()
+    db.refresh(client)
+
+    log_message(
+        db,
+        studio_id=client.studio_id,
+        client_id=client.id,
+        subject="Face Profile Registered",
+        body="Biometric consent given and facial selfie registered for smart search.",
+        channel="System"
+    )
+
+    return {
+        "status": "success",
+        "client_name": client.name,
+        "face_recognition_consent": client.face_recognition_consent,
+        "has_face_embedding": True
+    }
+
+
+# ----------------- Public Guest Wedding QR Upload Portal -----------------
+
+@app.get("/api/public/wedding/{booking_id}/info")
+def get_public_wedding_info(booking_id: str, db: Session = Depends(get_db), _ = Depends(public_limiter)):
+    booking = db.query(models.Booking).filter(models.Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Wedding session booking not found")
+        
+    client = db.query(models.Client).filter(models.Client.id == booking.client_id).first()
+    client_name = client.name if client else "Newlyweds"
+    
+    studio = db.query(models.Studio).filter(models.Studio.id == booking.studio_id).first()
+    studio_name = studio.name if studio else "Your Studio"
+    
+    return {
+        "booking_id": booking.id,
+        "session_type": booking.session_type,
+        "scheduled_at": booking.scheduled_at,
+        "client_name": client_name,
+        "studio_name": studio_name
+    }
+
+
+@app.post("/api/public/wedding/{booking_id}/guest-upload", response_model=schemas.PhotoResponse)
+async def upload_guest_wedding_photo(
+    booking_id: str,
+    guest_name: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _ = Depends(public_limiter)
+):
+    booking = db.query(models.Booking).filter(models.Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Wedding booking not found")
+
+    # Find or create a gallery for this booking to hold the guest photos
+    gallery = db.query(models.Gallery).filter(
+        models.Gallery.booking_id == booking_id
+    ).first()
+    
+    if not gallery:
+        gallery = models.Gallery(
+            studio_id=booking.studio_id,
+            booking_id=booking_id,
+            title=f"Guest Snapshot Album - {booking.session_type}",
+            status="Active"
+        )
+        db.add(gallery)
+        db.flush()
+
+    # 1. Cap File Size to 5MB
+    MAX_FILE_SIZE = 5 * 1024 * 1024
+    contents = await file.read()
+    if len(contents) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File is too large. Maximum allowed size is 5MB."
+        )
+
+    # 2. Verify Magic Bytes (JPEGs and PNGs only)
+    is_jpeg = contents.startswith(b'\xff\xd8\xff')
+    is_png = contents.startswith(b'\x89PNG\r\n\x1a\n')
+    if not is_jpeg and not is_png:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid image format. Only JPEGs and PNGs are accepted."
+        )
+
+    # 3. Store file on local disk uploads folder
+    upload_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "uploads")
+    os.makedirs(upload_dir, exist_ok=True)
+    
+    file_ext = ".jpg" if is_jpeg else ".png"
+    unique_filename = f"guest-{uuid.uuid4()}{file_ext}"
+    file_path = os.path.join(upload_dir, unique_filename)
+
+    with open(file_path, "wb") as f:
+        f.write(contents)
+
+    # 4. Insert photo record with Guest attribution tags
+    db_photo = models.Photo(
+        gallery_id=gallery.id,
+        original_url=f"/uploads/{unique_filename}",
+        edited_url=f"/uploads/{unique_filename}",
+        is_selected=False,
+        ai_tags=["Guest Upload", f"By: {guest_name}"],
+        uploaded_by_guest=guest_name,
+        is_guest_uploaded=True
+    )
+    db.add(db_photo)
+    db.commit()
+    db.refresh(db_photo)
+
+    return db_photo

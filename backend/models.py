@@ -49,6 +49,8 @@ class Client(Base):
     phone = Column(String, nullable=True)
     source = Column(String, nullable=True) # Referral, Instagram, Website, etc.
     preferences = Column(JSON, nullable=True) # Style feedback, details, tags
+    face_recognition_consent = Column(Boolean, default=False)
+    face_embedding = Column(JSON, nullable=True) # List of 128 float values
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     # Relationships
@@ -126,6 +128,9 @@ class Photo(Base):
     edited_url = Column(String, nullable=True)
     is_selected = Column(Boolean, default=False)
     ai_tags = Column(JSON, nullable=True) # List of tags like ['Golden Hour', 'Sharp', 'Portrait']
+    matched_clients = Column(JSON, nullable=True) # List of client IDs present in the image
+    uploaded_by_guest = Column(String, nullable=True) # Guest Name if guest uploaded
+    is_guest_uploaded = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     # Relationships

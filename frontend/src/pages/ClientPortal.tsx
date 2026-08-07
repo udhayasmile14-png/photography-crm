@@ -11,7 +11,10 @@ import {
   DollarSign,
   PenTool,
   CheckCircle,
-  MessageSquare
+  MessageSquare,
+  User,
+  ShieldCheck,
+  AlertCircle
 } from 'lucide-react';
 
 interface Booking {
@@ -61,6 +64,8 @@ interface PortalData {
     id: string;
     name: string;
     email: string;
+    face_recognition_consent?: boolean;
+    has_face_embedding?: boolean;
   };
   studio_name: string;
   bookings: Booking[];
@@ -86,6 +91,13 @@ const ClientPortal: React.FC = () => {
   const [consentChecked, setConsentChecked] = useState(false);
   const [signLoading, setSignLoading] = useState(false);
 
+  // Face Matching state
+  const [faceConsent, setFaceConsent] = useState(false);
+  const [selfieFile, setSelfieFile] = useState<File | null>(null);
+  const [uploadingSelfie, setUploadingSelfie] = useState(false);
+  const [selfieSuccess, setSelfieSuccess] = useState<string | null>(null);
+  const [selfieError, setSelfieError] = useState<string | null>(null);
+
   const fetchPortalData = async () => {
     try {
       const response = await fetch(`/api/public/clients/portal?token=${encodeURIComponent(token)}`);
@@ -110,13 +122,19 @@ const ClientPortal: React.FC = () => {
     }
   }, [clientId, token]);
 
+  useEffect(() => {
+    if (data?.client) {
+      setFaceConsent(!!data.client.face_recognition_consent);
+    }
+  }, [data]);
+
   const handleSignContract = async (contractId: string) => {
     if (!signatureName.trim()) return;
     setSignLoading(true);
 
     try {
       const response = await fetch(
-        `/api/public/contracts/${contractId}/sign?signature_name=${encodeURIComponent(signatureName)}&token=${encodeURIComponent(token)}`,
+        `/api/public/contracts/${contractId}/sign?signature_name={encodeURIComponent(signatureName)}&token=${encodeURIComponent(token)}`,
         { method: 'POST' }
       );
 
@@ -126,11 +144,48 @@ const ClientPortal: React.FC = () => {
 
       setSignatureName('');
       setSigningContractId(null);
+      setConsentChecked(false);
       fetchPortalData(); // Refresh data
     } catch (err: any) {
       alert(err.message || 'Error signing contract.');
     } finally {
       setSignLoading(false);
+    }
+  };
+
+  const handleSelfieUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selfieFile) return;
+
+    setUploadingSelfie(true);
+    setSelfieSuccess(null);
+    setSelfieError(null);
+
+    const formData = new FormData();
+    formData.append('file', selfieFile);
+
+    try {
+      const response = await fetch(`/api/public/clients/register-face?token=${encodeURIComponent(token)}`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Failed to analyze selfie image.');
+      }
+
+      setSelfieSuccess('Biometric profile registered! Face vector stored in PostgreSQL.');
+      setSelfieFile(null);
+      
+      const fileInput = document.getElementById('selfie-input') as HTMLInputElement;
+      if (fileInput) fileInput.value = '';
+
+      fetchPortalData(); // Refresh client status
+    } catch (err: any) {
+      setSelfieError(err.message || 'Error occurred.');
+    } finally {
+      setUploadingSelfie(false);
     }
   };
 
@@ -187,6 +242,113 @@ const ClientPortal: React.FC = () => {
           <h1 style={{ fontSize: '2.25rem', fontWeight: 800, fontFamily: 'var(--font-display)' }}>Welcome to Your Client Portal</h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Review contracts, pay outstanding invoices, and access your photo culling galleries.</p>
         </div>
+
+        {/* --- SMART GALLERY FACE MATCH SECTION --- */}
+        <section className="glass-panel" style={{ padding: '1.75rem', marginBottom: '2.5rem' }}>
+          <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', alignItems: 'start' }}>
+            
+            <div style={{ flex: '1.5', minWidth: '300px' }}>
+              <h2 style={{ fontSize: '1.35rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <ShieldCheck size={22} color="var(--accent-purple)" />
+                <span>Smart Gallery Face Match</span>
+              </h2>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: '1.5', marginBottom: '1.25rem' }}>
+                Enable face recognition to quickly filter delivery galleries and search for images containing your face. We extract a 128-dimensional mathematical vector representation of your features. Your biometric data is secure and will never be shared.
+              </p>
+
+              {/* Consent Toggle */}
+              <label style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', cursor: 'pointer', marginBottom: '1rem' }}>
+                <input 
+                  type="checkbox" 
+                  checked={faceConsent}
+                  onChange={(e) => setFaceConsent(e.target.checked)}
+                  style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                />
+                <span style={{ fontWeight: 600, fontSize: '0.9rem', color: faceConsent ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                  I consent to the processing of my facial biometric traits for gallery sorting.
+                </span>
+              </label>
+
+              {data.client.has_face_embedding && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent-emerald)', fontSize: '0.85rem', fontWeight: 600 }}>
+                  <CheckCircle size={16} />
+                  <span>Biometric Vector Registered (128-dimensional embedding stored in PostgreSQL)</span>
+                </div>
+              )}
+            </div>
+
+            {/* Selfie File Upload Dropzone */}
+            {faceConsent && (
+              <div style={{ flex: '1', minWidth: '260px' }}>
+                <div className="glass-panel" style={{ 
+                  border: '2px dashed var(--border-color)', 
+                  padding: '1.5rem', 
+                  borderRadius: 'var(--radius-md)', 
+                  textAlign: 'center',
+                  background: 'hsla(230, 20%, 10%, 0.3)',
+                  position: 'relative'
+                }}>
+                  {selfieError && (
+                    <div style={{ color: 'var(--accent-red)', fontSize: '0.75rem', marginBottom: '0.5rem', display: 'flex', gap: '0.25rem', justifyContent: 'center' }}>
+                      <AlertCircle size={14} />
+                      <span>{selfieError}</span>
+                    </div>
+                  )}
+
+                  {selfieSuccess && (
+                    <div style={{ color: 'var(--accent-emerald)', fontSize: '0.75rem', marginBottom: '0.5rem', display: 'flex', gap: '0.25rem', justifyContent: 'center' }}>
+                      <CheckCircle size={14} />
+                      <span>{selfieSuccess}</span>
+                    </div>
+                  )}
+
+                  <input 
+                    type="file" 
+                    id="selfie-input" 
+                    accept=".jpg,.jpeg,.png"
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files.length > 0) {
+                        setSelfieFile(e.target.files[0]);
+                        setSelfieSuccess(null);
+                        setSelfieError(null);
+                      }
+                    }}
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
+                    disabled={uploadingSelfie}
+                  />
+
+                  <User size={28} color="var(--text-muted)" style={{ marginBottom: '0.5rem' }} />
+
+                  {selfieFile ? (
+                    <div>
+                      <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.5rem' }}>
+                        {selfieFile.name}
+                      </div>
+                      <button 
+                        className="btn btn-primary" 
+                        onClick={handleSelfieUpload}
+                        disabled={uploadingSelfie}
+                        style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem', zIndex: 10, position: 'relative' }}
+                      >
+                        {uploadingSelfie ? 'Extracting Vector...' : 'Upload Selfie'}
+                      </button>
+                    </div>
+                  ) : (
+                    <div>
+                      <div style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-primary)' }}>
+                        {data.client.has_face_embedding ? 'Replace Profile Photo' : 'Upload Selfie Photo'}
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                        JPEG or PNG (Max 5MB)
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+          </div>
+        </section>
 
         {/* Dynamic Proofing Galleries Grid */}
         <section style={{ marginBottom: '3.5rem' }}>

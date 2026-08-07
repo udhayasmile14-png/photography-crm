@@ -102,6 +102,27 @@ def seed_db():
             notes="Requires solid gray backdrop."
         )
         db.add_all([booking_a1, booking_a2, booking_b1])
+
+        # Seeding EXACTLY 10 weddings for September 2026
+        september_weddings = []
+        for i in range(1, 11):
+            day = 3 + i * 2 # Distributes weddings on Sept 5, 7, 9, 11, ..., 23
+            scheduled_date = datetime.datetime(2026, 9, day, 14, 0)
+            
+            target_client = client_a1 if i % 2 == 0 else client_a2
+            wedding_booking = models.Booking(
+                studio_id=studio_a.id,
+                client_id=target_client.id,
+                session_type="Wedding",
+                scheduled_at=scheduled_date,
+                duration_minutes=480,
+                status="Confirmed",
+                price=2000.0 + (i * 150),
+                notes=f"September Wedding #{i}. Setup QR guest cards at dinner reception."
+            )
+            september_weddings.append(wedding_booking)
+        
+        db.add_all(september_weddings)
         db.flush()
 
         # 5. Create Invoices
