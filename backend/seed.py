@@ -5,8 +5,41 @@ from auth import get_password_hash
 
 def seed_db():
     print("Dropping existing tables and recreating database schema...")
-    Base.metadata.drop_all(bind=engine)
+    from sqlalchemy.sql import text
+    
+    # 1. Enable pgvector extension if it is supported by the engine
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+            conn.commit()
+            print("Successfully enabled pgvector extension.")
+    except Exception as e:
+        print(f"pgvector extension not enabled or not supported: {e}")
+
+    # Drop all existing tables using CASCADE to prevent dependency failures
+    try:
+        with engine.connect() as conn:
+            for table_name in ["message_logs", "contracts", "photos_faces", "photos", "galleries", "invoices", "wedding_guests", "bookings", "clients", "users", "studios"]:
+                conn.execute(text(f"DROP TABLE IF EXISTS {table_name} CASCADE;"))
+            conn.commit()
+            print("Successfully dropped existing tables with CASCADE.")
+    except Exception as e:
+        print(f"Warning: Error dropping tables cascade: {e}")
+
     Base.metadata.create_all(bind=engine)
+
+    # 2. Build HNSW similarity search indexes if pgvector is supported
+    if getattr(models, "PG_VECTOR_SUPPORTED", False):
+        try:
+            with engine.connect() as conn:
+                print("Creating pgvector HNSW similarity search indexes...")
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_clients_face_embedding ON clients USING hnsw (face_embedding vector_cosine_ops);"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_guests_face_embedding ON wedding_guests USING hnsw (face_embedding vector_cosine_ops);"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_photos_faces_embedding ON photos_faces USING hnsw (face_embedding vector_cosine_ops);"))
+                conn.commit()
+                print("pgvector HNSW indexes created successfully!")
+        except Exception as e:
+            print(f"Warning: Could not create HNSW indexes: {e}")
 
     db = SessionLocal()
     try:

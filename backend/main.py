@@ -592,6 +592,13 @@ def background_ai_processing(photo_id: str, db_session_factory):
                         
                         face_embedding = extract_face_embedding(crop_absolute_path)
                         if face_embedding:
+                            # Save face embedding to the database under photos_faces table
+                            db_face = models.PhotoFace(
+                                photo_id=photo_id,
+                                face_embedding=face_embedding
+                            )
+                            db.add(db_face)
+                            
                             for t_type, t_id, t_name, t_embedding in all_targets:
                                 sim = calculate_cosine_similarity(face_embedding, t_embedding)
                                 print(f"CNN Compare: photo {photo_id} face crop with {t_type} {t_name}. Cosine Similarity: {sim:.4f}")
