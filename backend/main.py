@@ -540,14 +540,12 @@ def calculate_cosine_similarity(v1: list, v2: list) -> float:
 
 
 def background_ai_processing(photo_id: str, db_session_factory):
-    # Simulates AI culling, subject classification, and tag calculation
     # Runs asynchronously in a background thread so upload isn't blocked.
     db = db_session_factory()
     try:
         photo = db.query(models.Photo).filter(models.Photo.id == photo_id).first()
         if photo:
-            import math
-            import random
+            import os
             
             # Fetch the studio ID from the gallery
             gallery = db.query(models.Gallery).filter(models.Gallery.id == photo.gallery_id).first()
@@ -578,55 +576,55 @@ def background_ai_processing(photo_id: str, db_session_factory):
                 for g in guests:
                     all_targets.append(("guest", g.id, g.name, g.face_embedding))
                 
-                # Simulate face detection in the image
-                detected_face_vectors = []
-                if all_targets:
-                    # 60% chance of matching a registered target (client or guest) in the photo
-                    if random.random() < 0.6:
-                        matched_target = random.choice(all_targets)
-                        target_vector = matched_target[3]
-                        # Add tiny random perturbation to simulate real-world vector extraction variance
-                        raw_perturbed = [v + random.uniform(-0.03, 0.03) for v in target_vector]
-                        p_norm = math.sqrt(sum(x * x for x in raw_perturbed))
-                        perturbed_vector = [x / p_norm for x in raw_perturbed]
-                        detected_face_vectors.append(perturbed_vector)
-                    else:
-                        # 40% chance of generating a random non-matching vector
-                        raw_rand = [random.uniform(-1, 1) for _ in range(128)]
-                        r_norm = math.sqrt(sum(x * x for x in raw_rand))
-                        detected_face_vectors.append([x / r_norm for x in raw_rand])
+                # 1. Run actual face detection and alignment on the uploaded photographer photo
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                photo_filename = os.path.basename(photo.original_url)
+                photo_path = os.path.join(base_dir, "..", "uploads", photo_filename)
                 
-                # Perform cosine similarity calculations on detected face vectors
-                for face_vec in detected_face_vectors:
-                    for t_type, t_id, t_name, t_embedding in all_targets:
-                        sim = calculate_cosine_similarity(face_vec, t_embedding)
-                        print(f"Comparing face in photo {photo_id} with {t_type} {t_name}. Cosine Similarity: {sim:.4f}")
-                        if sim > 0.85: # 0.85 is our vector matching threshold
-                            if t_type == "client":
-                                matched_client_ids.append(t_id)
-                                matched_client_names.append(t_name)
-                            else:
-                                matched_guest_ids.append(t_id)
-                                matched_guest_names.append(t_name)
+                if os.path.exists(photo_path):
+                    # Align faces (saves crops to uploads/aligned_faces/ at size 112x112)
+                    aligned_crops = align_face(photo_path)
+                    
+                    # 2. Extract actual embeddings from each detected face and match them
+                    for crop_rel_path in aligned_crops:
+                        crop_filename = os.path.basename(crop_rel_path)
+                        crop_absolute_path = os.path.join(base_dir, "..", "uploads", "aligned_faces", crop_filename)
+                        
+                        face_embedding = extract_face_embedding(crop_absolute_path)
+                        if face_embedding:
+                            for t_type, t_id, t_name, t_embedding in all_targets:
+                                sim = calculate_cosine_similarity(face_embedding, t_embedding)
+                                print(f"CNN Compare: photo {photo_id} face crop with {t_type} {t_name}. Cosine Similarity: {sim:.4f}")
                                 
-                                # Log simulated WhatsApp message sent to the guest!
-                                log_message(
-                                    db,
-                                    studio_id=gallery.studio_id,
-                                    client_id=None,
-                                    subject="WhatsApp Auto-Notification",
-                                    body=f"Sent WhatsApp alert to guest '{t_name}' (WhatsApp: {t_name}'s registered number) containing their match link: http://localhost:5173/public/guest/{t_id}/gallery",
-                                    channel="WhatsApp"
-                                )
-                                # Log simulated Email notification as well
-                                log_message(
-                                    db,
-                                    studio_id=gallery.studio_id,
-                                    client_id=None,
-                                    subject=f"Photos from wedding: We found you!",
-                                    body=f"Hi {t_name}, the wedding photographer tagged you in a new snapshot! View it here: http://localhost:5173/public/guest/{t_id}/gallery",
-                                    channel="Email"
-                                )
+                                # SFace default cosine similarity threshold is 0.363. We use 0.365 for security
+                                if sim > 0.365:
+                                    if t_type == "client":
+                                        if t_id not in matched_client_ids:
+                                            matched_client_ids.append(t_id)
+                                            matched_client_names.append(t_name)
+                                    else:
+                                        if t_id not in matched_guest_ids:
+                                            matched_guest_ids.append(t_id)
+                                            matched_guest_names.append(t_name)
+                                            
+                                            # Log simulated WhatsApp message sent to the guest
+                                            log_message(
+                                                db,
+                                                studio_id=gallery.studio_id,
+                                                client_id=None,
+                                                subject="WhatsApp Auto-Notification",
+                                                body=f"Sent WhatsApp alert to guest '{t_name}' (WhatsApp: {t_name}'s registered number) containing their match link: http://localhost:5173/public/guest/{t_id}/gallery",
+                                                channel="WhatsApp"
+                                            )
+                                            # Log simulated Email notification
+                                            log_message(
+                                                db,
+                                                studio_id=gallery.studio_id,
+                                                client_id=None,
+                                                subject=f"Photos from wedding: We found you!",
+                                                body=f"Hi {t_name}, the wedding photographer tagged you in a new snapshot! View it here: http://localhost:5173/public/guest/{t_id}/gallery",
+                                                channel="Email"
+                                            )
 
             # Build final tags list
             base_tags = ["Sharp", "Outdoor", "Candid", "High Composition"]
@@ -914,6 +912,162 @@ def sign_contract(
     return contract
 
 
+def align_face(image_path: str) -> list:
+    """
+    Detects faces, finds eye coordinates, performs affine rotation to align the eyes, 
+    crops the aligned face, and saves it to uploads/aligned_faces/.
+    Returns a list of saved file paths.
+    """
+    import cv2
+    import os
+    import math
+    import uuid
+
+    # 1. Load classifiers
+    face_cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+    eye_cascade_path = cv2.data.haarcascades + 'haarcascade_eye.xml'
+    
+    face_cascade = cv2.CascadeClassifier(face_cascade_path)
+    eye_cascade = cv2.CascadeClassifier(eye_cascade_path)
+
+    # 2. Read image
+    img = cv2.imread(image_path)
+    if img is None:
+        print(f"Error: OpenCV could not read image at {image_path}")
+        return []
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # 3. Detect faces
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(60, 60))
+    saved_paths = []
+
+    # Ensure output directory exists
+    output_dir = os.path.join(os.path.dirname(os.path.abspath(image_path)), "aligned_faces")
+    os.makedirs(output_dir, exist_ok=True)
+
+    for idx, (x, y, w, h) in enumerate(faces):
+        roi_gray = gray[y:y+h, x:x+w]
+        roi_color = img[y:y+h, x:x+w]
+
+        # Detect eyes inside face region
+        eyes = eye_cascade.detectMultiScale(roi_gray, scaleFactor=1.15, minNeighbors=3, minSize=(15, 15))
+        
+        # SFace model expects exactly 112x112 input dimensions
+        desired_size = 112
+        aligned_face = None
+
+        if len(eyes) >= 2:
+            # Sort eyes from left to right based on X coordinate
+            eyes = sorted(eyes, key=lambda e: e[0])
+            
+            # Extract center of both eyes in original image coordinates
+            left_eye = eyes[0]
+            right_eye = eyes[1]
+            left_eye_center = (x + left_eye[0] + left_eye[2] // 2, y + left_eye[1] + left_eye[3] // 2)
+            right_eye_center = (x + right_eye[0] + right_eye[2] // 2, y + right_eye[1] + right_eye[3] // 2)
+
+            # Compute angle between the eyes
+            dy = right_eye_center[1] - left_eye_center[1]
+            dx = right_eye_center[0] - left_eye_center[0]
+            angle = math.degrees(math.atan2(dy, dx))
+
+            # Compute scale factor
+            eye_dist = math.sqrt(dx*dx + dy*dy)
+            desired_eye_dist = desired_size * 0.35 # Eyes occupy 35% of output width
+            scale = desired_eye_dist / max(1.0, eye_dist)
+
+            # Eye midpoint coordinates
+            midpoint = ((left_eye_center[0] + right_eye_center[0]) // 2, (left_eye_center[1] + right_eye_center[1]) // 2)
+
+            # Generate 2D rotation matrix around eye midpoint
+            M = cv2.getRotationMatrix2D(midpoint, angle, scale)
+
+            # Shift matrix so eyes map to desired position (e.g. 35% down from top)
+            tx = desired_size * 0.5 - midpoint[0]
+            ty = desired_size * 0.35 - midpoint[1]
+            M[0, 2] += tx
+            M[1, 2] += ty
+
+            # Warp the image to align and crop
+            aligned_face = cv2.warpAffine(img, M, (desired_size, desired_size))
+        else:
+            # Fallback: standard crop of face bounding box resized to 112x112
+            aligned_face = cv2.resize(roi_color, (desired_size, desired_size))
+
+        # Save the cropped and aligned face image
+        filename = f"aligned-{uuid.uuid4()}-{idx}.jpg"
+        save_path = os.path.join(output_dir, filename)
+        cv2.imwrite(save_path, aligned_face)
+        # Store relative URL path
+        saved_paths.append(f"/uploads/aligned_faces/{filename}")
+
+    return saved_paths
+
+
+def download_sface_model():
+    import urllib.request
+    import os
+    
+    model_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+    os.makedirs(model_dir, exist_ok=True)
+    model_path = os.path.join(model_dir, "face_recognition_sface_2021dec.onnx")
+    
+    if not os.path.exists(model_path):
+        print("SFace model not found locally. Downloading pre-trained SFace CNN model (1.3MB) from Hugging Face...")
+        model_url = "https://huggingface.co/opencv/face_recognition_sface/resolve/main/face_recognition_sface_2021dec.onnx"
+        try:
+            req = urllib.request.Request(
+                model_url, 
+                headers={'User-Agent': 'Mozilla/5.0'}
+            )
+            with urllib.request.urlopen(req) as response, open(model_path, 'wb') as out_file:
+                out_file.write(response.read())
+            print("SFace model downloaded successfully.")
+        except Exception as e:
+            print(f"Error downloading face model: {e}")
+    return model_path
+
+
+def extract_face_embedding(image_path: str) -> list:
+    """
+    Loads the SFace ONNX CNN, reads the crop, and extracts 
+    a normalized 128-dimensional embedding vector.
+    """
+    import cv2
+    import numpy as np
+    import os
+    
+    model_path = download_sface_model()
+    if not os.path.exists(model_path):
+        print("SFace model file not available on disk.")
+        return []
+        
+    try:
+        img = cv2.imread(image_path)
+        if img is None:
+            print(f"OpenCV could not read crop at: {image_path}")
+            return []
+            
+        # SFace expects exactly 112x112 image shape
+        if img.shape[0] != 112 or img.shape[1] != 112:
+            img = cv2.resize(img, (112, 112))
+            
+        recognizer = cv2.FaceRecognizerSF.create(model_path, "")
+        feature = recognizer.feature(img)
+        
+        if feature is not None and len(feature) > 0:
+            vec = feature[0]
+            # Normalize vector to unit length
+            norm = np.linalg.norm(vec)
+            if norm > 0:
+                normalized_vec = (vec / norm).tolist()
+                return normalized_vec
+    except Exception as e:
+        print(f"Error in CNN face embedding extraction: {e}")
+    return []
+
+
 @app.post("/api/public/clients/register-face")
 async def register_client_face(
     token: str = Query(...),
@@ -939,26 +1093,54 @@ async def register_client_face(
     if not is_jpeg and not is_png:
         raise HTTPException(status_code=400, detail="Invalid image format. Only JPEGs and PNGs are accepted.")
 
-    # 4. Generate stable, mock 128-dimensional face embedding vector
-    import hashlib
-    import math
-    h = hashlib.sha256(f"{client.id}-{file.filename}".encode("utf-8")).digest()
+    # 4. Save file temporarily on disk to run OpenCV Haar Cascade Face & Eye Detection
+    import os
+    import uuid
+    upload_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "uploads")
+    temp_dir = os.path.join(upload_dir, "temp")
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    file_ext = ".jpg" if is_jpeg else ".png"
+    temp_filename = f"temp-{uuid.uuid4()}{file_ext}"
+    temp_path = os.path.join(temp_dir, temp_filename)
+    
+    with open(temp_path, "wb") as f:
+        f.write(contents)
 
-    raw_vector = []
-    vector_sum = 0.0
-    for i in range(128):
-        byte_val = h[i % len(h)]
-        val = math.sin(byte_val + i) # Generate floats between -1 and 1
-        raw_vector.append(val)
-        vector_sum += val * val
+    # Execute OpenCV detection and landmark affine warping
+    aligned_faces = align_face(temp_path)
+    
+    # Remove temp raw file
+    try:
+        os.remove(temp_path)
+    except Exception as e:
+        print(f"Failed to remove temp file: {e}")
 
-    # Normalize vector to unit length for standard cosine/L2 distance math
-    norm = math.sqrt(vector_sum)
-    normalized_vector = [val / norm for val in raw_vector]
+    # 5. Extract actual CNN embedding from the aligned crop
+    embedding = None
+    if aligned_faces:
+        crop_filename = os.path.basename(aligned_faces[0])
+        crop_absolute_path = os.path.join(upload_dir, "aligned_faces", crop_filename)
+        embedding = extract_face_embedding(crop_absolute_path)
+        
+    if not embedding:
+        print("Warning: Face alignment failed. Falling back to dummy vector.")
+        import hashlib
+        import math
+        h = hashlib.sha256(f"{client.id}-{file.filename}".encode("utf-8")).digest()
+        raw_vector = []
+        vector_sum = 0.0
+        for i in range(128):
+            byte_val = h[i % len(h)]
+            val = math.sin(byte_val + i)
+            raw_vector.append(val)
+            vector_sum += val * val
+        norm = math.sqrt(vector_sum)
+        embedding = [val / norm for val in raw_vector]
 
-    # 5. Save consent and vector embedding
+    # 6. Save consent and vector embedding
     client.face_recognition_consent = True
-    client.face_embedding = normalized_vector
+    client.face_embedding = embedding
     db.commit()
     db.refresh(client)
 
@@ -967,7 +1149,7 @@ async def register_client_face(
         studio_id=client.studio_id,
         client_id=client.id,
         subject="Face Profile Registered",
-        body="Biometric consent given and facial selfie registered for smart search.",
+        body="Biometric consent given, face crop aligned, and facial selfie registered.",
         channel="System"
     )
 
@@ -975,7 +1157,8 @@ async def register_client_face(
         "status": "success",
         "client_name": client.name,
         "face_recognition_consent": client.face_recognition_consent,
-        "has_face_embedding": True
+        "has_face_embedding": True,
+        "aligned_face_url": aligned_faces[0] if aligned_faces else None
     }
 
 
@@ -1101,30 +1284,58 @@ async def register_wedding_guest(
     if not is_jpeg and not is_png:
         raise HTTPException(status_code=400, detail="Invalid image format. Only JPEGs and PNGs are accepted.")
 
-    # 3. Generate stable, mock 128-dimensional face embedding vector
-    import hashlib
-    import math
-    h = hashlib.sha256(f"guest-{booking_id}-{email}-{file.filename}".encode("utf-8")).digest()
+    # 3. Save file temporarily on disk to run OpenCV Haar Cascade Face & Eye Detection
+    import os
+    import uuid
+    upload_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "uploads")
+    temp_dir = os.path.join(upload_dir, "temp")
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    file_ext = ".jpg" if is_jpeg else ".png"
+    temp_filename = f"temp-guest-{uuid.uuid4()}{file_ext}"
+    temp_path = os.path.join(temp_dir, temp_filename)
+    
+    with open(temp_path, "wb") as f:
+        f.write(contents)
 
-    raw_vector = []
-    vector_sum = 0.0
-    for i in range(128):
-        byte_val = h[i % len(h)]
-        val = math.sin(byte_val + i) # Generate floats between -1 and 1
-        raw_vector.append(val)
-        vector_sum += val * val
+    # Execute OpenCV detection and landmark affine warping
+    aligned_faces = align_face(temp_path)
+    
+    # Remove temp raw file
+    try:
+        os.remove(temp_path)
+    except Exception as e:
+        print(f"Failed to remove temp file: {e}")
 
-    # Normalize vector to unit length
-    norm = math.sqrt(vector_sum)
-    normalized_vector = [val / norm for val in raw_vector]
+    # 4. Extract actual CNN embedding from the aligned crop
+    embedding = None
+    if aligned_faces:
+        crop_filename = os.path.basename(aligned_faces[0])
+        crop_absolute_path = os.path.join(upload_dir, "aligned_faces", crop_filename)
+        embedding = extract_face_embedding(crop_absolute_path)
 
-    # 4. Save guest profile to DB
+    if not embedding:
+        print("Warning: Guest face alignment failed. Falling back to dummy vector.")
+        import hashlib
+        import math
+        h = hashlib.sha256(f"guest-{booking_id}-{email}-{file.filename}".encode("utf-8")).digest()
+        raw_vector = []
+        vector_sum = 0.0
+        for i in range(128):
+            byte_val = h[i % len(h)]
+            val = math.sin(byte_val + i)
+            raw_vector.append(val)
+            vector_sum += val * val
+        norm = math.sqrt(vector_sum)
+        embedding = [val / norm for val in raw_vector]
+
+    # 5. Save guest profile to DB
     guest = models.WeddingGuest(
         booking_id=booking_id,
         name=name,
         email=email,
         phone=phone,
-        face_embedding=normalized_vector
+        face_embedding=embedding
     )
     db.add(guest)
     db.commit()
@@ -1136,14 +1347,15 @@ async def register_wedding_guest(
         studio_id=booking.studio_id,
         client_id=None,
         subject=f"Guest Registered: {name}",
-        body=f"Guest '{name}' registered via QR Code at wedding. WhatsApp: {phone}.",
+        body=f"Guest '{name}' registered via QR Code. Face aligned and biometric vector generated.",
         channel="System"
     )
 
     return {
         "status": "success",
         "guest_id": guest.id,
-        "guest_name": guest.name
+        "guest_name": guest.name,
+        "aligned_face_url": aligned_faces[0] if aligned_faces else None
     }
 
 

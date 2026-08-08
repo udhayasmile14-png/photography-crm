@@ -64,3 +64,8 @@ backend/crm.db-journal
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+# ONNX Models and upload directories
+*.onnx
+backend/models/*.onnx
+uploads/
