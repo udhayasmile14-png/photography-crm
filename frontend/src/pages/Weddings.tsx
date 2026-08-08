@@ -84,7 +84,7 @@ const Weddings: React.FC = () => {
   });
 
   const getGuestUrl = (bookingId: string) => {
-    return `${window.location.origin}/public/wedding/${bookingId}/guest-upload`;
+    return `${window.location.origin}/public/wedding/${bookingId}/guest-register`;
   };
 
   const handlePrintCard = () => {

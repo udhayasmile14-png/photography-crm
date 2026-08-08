@@ -90,6 +90,23 @@ class BookingResponse(BookingBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+# ----------------- Wedding Guest Schemas -----------------
+class WeddingGuestBase(BaseModel):
+    name: str
+    email: str
+    phone: str # WhatsApp number
+    face_embedding: Optional[List[float]] = None
+
+class WeddingGuestCreate(WeddingGuestBase):
+    pass
+
+class WeddingGuestResponse(WeddingGuestBase):
+    id: str
+    booking_id: str
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
 # ----------------- Invoice Schemas -----------------
 class InvoiceBase(BaseModel):
     booking_id: str
@@ -118,6 +135,7 @@ class PhotoBase(BaseModel):
     is_selected: Optional[bool] = False
     ai_tags: Optional[List[str]] = None
     matched_clients: Optional[List[str]] = None
+    matched_guests: Optional[List[str]] = None
     uploaded_by_guest: Optional[str] = None
     is_guest_uploaded: Optional[bool] = False
 
@@ -173,7 +191,7 @@ class ContractResponse(ContractBase):
 
 # ----------------- Message Log Schemas -----------------
 class MessageLogBase(BaseModel):
-    client_id: str
+    client_id: Optional[str] = None
     subject: str
     body: str
     channel: str = "Email"

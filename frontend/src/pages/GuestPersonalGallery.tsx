@@ -1,13 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { 
   Camera, 
   Heart, 
-  ChevronLeft, 
   Download, 
   X, 
   Loader2,
-  Tag
+  HeartHandshake
 } from 'lucide-react';
 
 interface Photo {
@@ -16,86 +15,70 @@ interface Photo {
   edited_url: string | null;
   is_selected: boolean;
   ai_tags: string[] | null;
-  matched_clients: string[] | null;
 }
 
-interface GalleryData {
-  id: string;
-  title: string;
-  booking?: {
-    session_type: string;
-    client?: {
-      id: string;
-      name: string;
-      face_recognition_consent?: boolean;
-    }
+interface GuestGalleryData {
+  guest: {
+    id: string;
+    name: string;
+    email: string;
+    phone: string;
+  };
+  wedding: {
+    booking_id: string;
+    client_name: string;
+    studio_name: string;
+    scheduled_at: string;
   };
   photos: Photo[];
 }
 
-const GalleryProofing: React.FC = () => {
-  const { clientId, galleryId } = useParams<{ clientId: string; galleryId: string }>();
+const GuestPersonalGallery: React.FC = () => {
+  const { guestId } = useParams<{ guestId: string }>();
 
-  // Extract signed JWT token from URL query parameters
-  const token = new URLSearchParams(window.location.search).get('token') || '';
-
-  const [gallery, setGallery] = useState<GalleryData | null>(null);
+  const [data, setData] = useState<GuestGalleryData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [activePhoto, setActivePhoto] = useState<Photo | null>(null);
-  
-  // Filters
-  const [filterTag, setFilterTag] = useState<string | null>(null);
-  const [showOnlyMe, setShowOnlyMe] = useState(false);
-  const [allTags, setAllTags] = useState<string[]>([]);
 
-  const fetchGallery = async () => {
+  const fetchGuestGallery = async () => {
     try {
-      const response = await fetch(`/api/public/galleries/${galleryId}?token=${encodeURIComponent(token)}`);
-      if (response.ok) {
-        const data = await response.json();
-        setGallery(data);
-        
-        // Extract unique AI tags
-        const tagsSet = new Set<string>();
-        data.photos.forEach((p: Photo) => {
-          if (p.ai_tags) {
-            p.ai_tags.forEach(t => tagsSet.add(t));
-          }
-        });
-        setAllTags(Array.from(tagsSet));
+      const response = await fetch(`/api/public/guest/${guestId}/gallery`);
+      if (!response.ok) {
+        throw new Error('Could not retrieve your personalized wedding photos.');
       }
-    } catch (err) {
-      console.error(err);
+      const result = await response.json();
+      setData(result);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Error occurred.');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (galleryId && token) {
-      fetchGallery();
-    } else {
-      setLoading(false);
+    if (guestId) {
+      fetchGuestGallery();
     }
-  }, [galleryId, token]);
+  }, [guestId]);
 
   const toggleFavorite = async (photoId: string) => {
     try {
-      const response = await fetch(`/api/public/photos/${photoId}/favorite?token=${encodeURIComponent(token)}`, {
+      // Toggle favorite using guest scope (uses client/public favorites endpoint)
+      const response = await fetch(`/api/public/photos/${photoId}/favorite`, {
         method: 'POST'
       });
       if (response.ok) {
         const updatedPhoto = await response.json();
         
-        // Update local gallery state
-        if (gallery) {
-          const updatedPhotos = gallery.photos.map(p => 
+        // Update local photo list state
+        if (data) {
+          const updatedPhotos = data.photos.map(p => 
             p.id === photoId ? { ...p, is_selected: updatedPhoto.is_selected } : p
           );
-          setGallery({ ...gallery, photos: updatedPhotos });
+          setData({ ...data, photos: updatedPhotos });
         }
 
-        // Update active modal state
         if (activePhoto && activePhoto.id === photoId) {
           setActivePhoto({ ...activePhoto, is_selected: updatedPhoto.is_selected });
         }
@@ -113,32 +96,18 @@ const GalleryProofing: React.FC = () => {
     );
   }
 
-  if (!gallery) {
+  if (errorMsg || !data) {
     return (
       <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center', backgroundColor: 'var(--bg-app)', padding: '2rem' }}>
         <div className="glass-panel" style={{ padding: '2.5rem', maxWidth: '450px', textAlign: 'center' }}>
           <Camera size={32} color="var(--accent-red)" style={{ marginBottom: '1rem' }} />
-          <h2 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Gallery Not Found</h2>
+          <h2 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Personal Gallery Inactive</h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
-            The requested gallery links do not exist, require authentication, or have been archived by the photographer.
+            {errorMsg || 'We could not fetch your personalized photos.'}
           </p>
-          <Link to={`/portal/${clientId}?token=${encodeURIComponent(token)}`} className="btn btn-secondary">Return to portal</Link>
         </div>
       </div>
     );
-  }
-
-  const selectedCount = gallery.photos.filter(p => p.is_selected).length;
-
-  // Filter Photos logic based on tag filters or "Just Me" biometric search
-  let filteredPhotos = gallery.photos;
-  if (showOnlyMe) {
-    filteredPhotos = gallery.photos.filter(p => 
-      (p.matched_clients && p.matched_clients.includes(clientId || '')) ||
-      (p.ai_tags && p.ai_tags.includes(`Found: ${gallery.booking?.client?.name}`))
-    );
-  } else if (filterTag) {
-    filteredPhotos = gallery.photos.filter(p => p.ai_tags && p.ai_tags.includes(filterTag));
   }
 
   return (
@@ -158,95 +127,40 @@ const GalleryProofing: React.FC = () => {
         alignItems: 'center'
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <Link to={`/portal/${clientId}?token=${encodeURIComponent(token)}`} style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center' }}>
-            <ChevronLeft size={22} />
-          </Link>
+          <div style={{ background: 'hsla(250, 60%, 60%, 0.15)', padding: '0.35rem', borderRadius: '50%' }}>
+            <HeartHandshake size={20} color="var(--accent-purple)" />
+          </div>
           <div>
-            <h1 style={{ fontSize: '1.2rem', fontWeight: 700 }}>{gallery.title}</h1>
+            <h1 style={{ fontSize: '1.2rem', fontWeight: 700 }}>Hi {data.guest.name}!</h1>
             <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-              Proofing for {gallery.booking?.client?.name || 'Client'} — {gallery.booking?.session_type}
+              Your matched photos from {data.wedding.client_name}'s Wedding
             </span>
           </div>
         </div>
-
-        {/* Proofing Progress Stats */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', background: 'hsla(250, 60%, 60%, 0.15)', border: '1px solid var(--border-color)', padding: '0.4rem 0.8rem', borderRadius: 'var(--radius-sm)' }}>
-            <Heart size={14} fill="var(--accent-purple)" color="var(--accent-purple)" />
-            <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>
-              {selectedCount} Selected
-            </span>
-          </div>
-        </div>
+        
+        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+          Powered by {data.wedding.studio_name}
+        </span>
       </header>
 
-      {/* Grid Content */}
-      <main style={{ maxWidth: '1400px', margin: '0 auto', padding: '2rem' }}>
+      {/* Main Grid Content */}
+      <main style={{ maxWidth: '1400px', margin: '0 auto', padding: '2.5rem 2rem' }}>
         
-        {/* Filters bar */}
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '2rem', alignItems: 'center' }}>
-          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.25rem', marginRight: '0.5rem' }}>
-            <Tag size={14} />
-            <span>AI Filters:</span>
-          </span>
-
-          {/* Biometric Face Matching Toggle Filter */}
-          {gallery.booking?.client?.face_recognition_consent && (
-            <button
-              className={`btn ${showOnlyMe ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ 
-                padding: '0.35rem 0.75rem', 
-                fontSize: '0.75rem', 
-                borderRadius: '20px', 
-                display: 'inline-flex', 
-                alignItems: 'center', 
-                gap: '0.25rem',
-                borderColor: 'var(--accent-purple)',
-                color: showOnlyMe ? '#fff' : 'var(--accent-purple)'
-              }}
-              onClick={() => {
-                setShowOnlyMe(!showOnlyMe);
-                setFilterTag(null); // Clear tag filters
-              }}
-            >
-              <span>🔍 Just Me</span>
-            </button>
-          )}
-
-          <button 
-            className={`btn ${(!filterTag && !showOnlyMe) ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem', borderRadius: '20px' }}
-            onClick={() => {
-              setFilterTag(null);
-              setShowOnlyMe(false);
-            }}
-          >
-            All Photos
-          </button>
-          
-          {allTags.map(t => (
-            <button
-              key={t}
-              className={`btn ${filterTag === t ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem', borderRadius: '20px' }}
-              onClick={() => {
-                setFilterTag(t);
-                setShowOnlyMe(false); // Clear biometric filter
-              }}
-            >
-              {t}
-            </button>
-          ))}
+        <div style={{ marginBottom: '2.5rem' }}>
+          <h2 style={{ fontSize: '1.8rem', fontWeight: 800, color: '#fff', marginBottom: '0.25rem' }}>Your Custom Photo Hub</h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+            Our biometric matching culler scanned the wedding album and found you in the <strong>{data.photos.length}</strong> snapshots below.
+          </p>
         </div>
 
-        {/* Gallery Image Grid */}
-        {filteredPhotos.length > 0 ? (
+        {/* Photo Grid */}
+        {data.photos.length > 0 ? (
           <div style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
             gap: '1.5rem'
           }}>
-            {filteredPhotos.map((photo) => (
+            {data.photos.map((photo) => (
               <div 
                 key={photo.id} 
                 className="glass-panel" 
@@ -261,17 +175,14 @@ const GalleryProofing: React.FC = () => {
               >
                 <img 
                   src={photo.edited_url || photo.original_url} 
-                  alt="Gallery Proof" 
+                  alt="Personal Guest Match" 
                   style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 />
                 
-                {/* Image Info / Selection Hover Overlays */}
+                {/* Image info overlays */}
                 <div style={{
                   position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
+                  top: 0, left: 0, right: 0, bottom: 0,
                   background: 'linear-gradient(to top, rgba(15,23,42,0.8) 0%, rgba(15,23,42,0.1) 40%, rgba(15,23,42,0.4) 100%)',
                   opacity: activePhoto?.id === photo.id ? 1 : 0,
                   transition: 'opacity 0.2s',
@@ -296,7 +207,7 @@ const GalleryProofing: React.FC = () => {
                     </button>
                   </div>
                   
-                  {/* AI Tags listed in overlay */}
+                  {/* Photo tags */}
                   <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
                     {photo.ai_tags && photo.ai_tags.map(tag => (
                       <span key={tag} style={{ fontSize: '0.65rem', background: 'hsla(230, 20%, 10%, 0.8)', padding: '0.15rem 0.4rem', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
@@ -310,12 +221,12 @@ const GalleryProofing: React.FC = () => {
           </div>
         ) : (
           <div className="glass-panel" style={{ padding: '3.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-            No images match your active filters.
+            We haven't found your face in the photos uploaded so far. Check back again as the photographer continues uploading the shoot!
           </div>
         )}
       </main>
 
-      {/* Fullscreen Photo Review Modal */}
+      {/* Fullscreen Modal View */}
       {activePhoto && (
         <div style={{
           position: 'fixed',
@@ -328,9 +239,8 @@ const GalleryProofing: React.FC = () => {
           justifyContent: 'space-between',
           padding: '2rem'
         }}>
-          {/* Modal Header */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Press ESC or click close button to return</span>
+            <span style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Personal Snapshot Preview</span>
             <button 
               onClick={() => setActivePhoto(null)}
               style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer' }}
@@ -339,19 +249,16 @@ const GalleryProofing: React.FC = () => {
             </button>
           </div>
 
-          {/* Main Large Image Container */}
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '2rem 0', position: 'relative' }}>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '2rem 0' }}>
             <img 
               src={activePhoto.original_url} 
-              alt="Proof Preview Large" 
+              alt="Personal Large View" 
               style={{ maxHeight: '75vh', maxWidth: '85vw', objectFit: 'contain', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}
             />
           </div>
 
-          {/* Modal Footer Controls */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', maxWidth: '800px', margin: '0 auto', width: '100%' }}>
             
-            {/* AI tag footprint */}
             <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
               {activePhoto.ai_tags && activePhoto.ai_tags.map(tag => (
                 <span key={tag} style={{ fontSize: '0.7rem', background: 'hsla(230, 20%, 10%, 0.6)', padding: '0.25rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}>
@@ -361,14 +268,13 @@ const GalleryProofing: React.FC = () => {
             </div>
 
             <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-              {/* Select/Favorite Button */}
               <button 
                 className="btn btn-primary"
                 onClick={() => toggleFavorite(activePhoto.id)}
                 style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', padding: '0.75rem 1.5rem' }}
               >
                 <Heart size={18} fill={activePhoto.is_selected ? '#fff' : 'none'} />
-                <span>{activePhoto.is_selected ? 'Deselect Photo' : 'Select Photo / Favorite'}</span>
+                <span>{activePhoto.is_selected ? 'Remove Selection' : 'Select Photo'}</span>
               </button>
 
               <a 
@@ -380,7 +286,7 @@ const GalleryProofing: React.FC = () => {
                 style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', padding: '0.75rem 1.25rem', textDecoration: 'none' }}
               >
                 <Download size={18} />
-                <span>Download Proof</span>
+                <span>Save to Device</span>
               </a>
             </div>
 
@@ -392,4 +298,4 @@ const GalleryProofing: React.FC = () => {
   );
 };
 
-export default GalleryProofing;
+export default GuestPersonalGallery;

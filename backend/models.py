@@ -81,6 +81,22 @@ class Booking(Base):
     invoices = relationship("Invoice", back_populates="booking", cascade="all, delete-orphan")
     galleries = relationship("Gallery", back_populates="booking", cascade="all, delete-orphan")
     contracts = relationship("Contract", back_populates="booking", cascade="all, delete-orphan")
+    wedding_guests = relationship("WeddingGuest", back_populates="booking", cascade="all, delete-orphan")
+
+
+class WeddingGuest(Base):
+    __tablename__ = "wedding_guests"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    booking_id = Column(String, ForeignKey("bookings.id"), nullable=False)
+    name = Column(String, nullable=False)
+    email = Column(String, nullable=False)
+    phone = Column(String, nullable=False) # WhatsApp number
+    face_embedding = Column(JSON, nullable=True) # 128 floats
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    # Relationships
+    booking = relationship("Booking", back_populates="wedding_guests")
 
 
 class Invoice(Base):
@@ -129,6 +145,7 @@ class Photo(Base):
     is_selected = Column(Boolean, default=False)
     ai_tags = Column(JSON, nullable=True) # List of tags like ['Golden Hour', 'Sharp', 'Portrait']
     matched_clients = Column(JSON, nullable=True) # List of client IDs present in the image
+    matched_guests = Column(JSON, nullable=True) # List of WeddingGuest IDs present in the image
     uploaded_by_guest = Column(String, nullable=True) # Guest Name if guest uploaded
     is_guest_uploaded = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
@@ -165,10 +182,10 @@ class MessageLog(Base):
 
     id = Column(String, primary_key=True, default=generate_uuid)
     studio_id = Column(String, ForeignKey("studios.id"), nullable=False)
-    client_id = Column(String, ForeignKey("clients.id"), nullable=False)
+    client_id = Column(String, ForeignKey("clients.id"), nullable=True)
     subject = Column(String, nullable=False)
     body = Column(String, nullable=False)
-    channel = Column(String, default="Email") # Email, SMS
+    channel = Column(String, default="Email") # Email, SMS, WhatsApp
     status = Column(String, default="Sent") # Sent, Failed
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 

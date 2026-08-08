@@ -10,6 +10,8 @@ import Contracts from './pages/Contracts';
 import PhotoUpload from './pages/PhotoUpload';
 import Weddings from './pages/Weddings';
 import GuestPortal from './pages/GuestPortal';
+import GuestRegister from './pages/GuestRegister';
+import GuestPersonalGallery from './pages/GuestPersonalGallery';
 import ClientPortal from './pages/ClientPortal';
 import GalleryProofing from './pages/GalleryProofing';
 
@@ -130,7 +132,11 @@ const App: React.FC = () => {
           {/* Public Portal Routes */}
           <Route path="/portal/:clientId" element={<ClientPortal />} />
           <Route path="/portal/:clientId/gallery/:galleryId" element={<GalleryProofing />} />
+          
+          {/* Public Guest QR Routes */}
           <Route path="/public/wedding/:bookingId/guest-upload" element={<GuestPortal />} />
+          <Route path="/public/wedding/:bookingId/guest-register" element={<GuestRegister />} />
+          <Route path="/public/guest/:guestId/gallery" element={<GuestPersonalGallery />} />
           
           {/* Fallback */}
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

@@ -77,7 +77,7 @@ def register_studio(user_in: schemas.UserCreate, db: Session = Depends(get_db)):
     log_message(
         db, 
         studio_id=new_studio.id, 
-        client_id="system-welcome", # placeholder
+        client_id=None,
         subject="Welcome to Aperture!", 
         body=f"Hello {user_in.name}, your workspace for '{user_in.studio_name}' is ready.",
         channel="Email"
@@ -527,6 +527,18 @@ def get_contract_by_id(
 
 # ----------------- Image Upload (Photographer dashboard) -----------------
 
+def calculate_cosine_similarity(v1: list, v2: list) -> float:
+    if not v1 or not v2 or len(v1) != len(v2):
+        return 0.0
+    import math
+    dot_product = sum(x * y for x, y in zip(v1, v2))
+    norm_v1 = math.sqrt(sum(x * x for x in v1))
+    norm_v2 = math.sqrt(sum(y * y for y in v2))
+    if norm_v1 == 0.0 or norm_v2 == 0.0:
+        return 0.0
+    return dot_product / (norm_v1 * norm_v2)
+
+
 def background_ai_processing(photo_id: str, db_session_factory):
     # Simulates AI culling, subject classification, and tag calculation
     # Runs asynchronously in a background thread so upload isn't blocked.
@@ -534,10 +546,100 @@ def background_ai_processing(photo_id: str, db_session_factory):
     try:
         photo = db.query(models.Photo).filter(models.Photo.id == photo_id).first()
         if photo:
-            # Add mock computed AI tags after parsing "processing"
-            photo.ai_tags = ["Sharp", "Outdoor", "Candid", "High Composition"]
+            import math
+            import random
+            
+            # Fetch the studio ID from the gallery
+            gallery = db.query(models.Gallery).filter(models.Gallery.id == photo.gallery_id).first()
+            
+            matched_client_ids = []
+            matched_client_names = []
+            matched_guest_ids = []
+            matched_guest_names = []
+            
+            if gallery:
+                # Query all consented clients of the studio with face profiles
+                clients = db.query(models.Client).filter(
+                    models.Client.studio_id == gallery.studio_id,
+                    models.Client.face_recognition_consent == True,
+                    models.Client.face_embedding != None
+                ).all()
+                
+                # Query all registered wedding guests for this wedding booking ID
+                guests = db.query(models.WeddingGuest).filter(
+                    models.WeddingGuest.booking_id == gallery.booking_id,
+                    models.WeddingGuest.face_embedding != None
+                ).all()
+                
+                # Combine targets for face comparison
+                all_targets = [] # list of tuples: (type, id, name, embedding)
+                for c in clients:
+                    all_targets.append(("client", c.id, c.name, c.face_embedding))
+                for g in guests:
+                    all_targets.append(("guest", g.id, g.name, g.face_embedding))
+                
+                # Simulate face detection in the image
+                detected_face_vectors = []
+                if all_targets:
+                    # 60% chance of matching a registered target (client or guest) in the photo
+                    if random.random() < 0.6:
+                        matched_target = random.choice(all_targets)
+                        target_vector = matched_target[3]
+                        # Add tiny random perturbation to simulate real-world vector extraction variance
+                        raw_perturbed = [v + random.uniform(-0.03, 0.03) for v in target_vector]
+                        p_norm = math.sqrt(sum(x * x for x in raw_perturbed))
+                        perturbed_vector = [x / p_norm for x in raw_perturbed]
+                        detected_face_vectors.append(perturbed_vector)
+                    else:
+                        # 40% chance of generating a random non-matching vector
+                        raw_rand = [random.uniform(-1, 1) for _ in range(128)]
+                        r_norm = math.sqrt(sum(x * x for x in raw_rand))
+                        detected_face_vectors.append([x / r_norm for x in raw_rand])
+                
+                # Perform cosine similarity calculations on detected face vectors
+                for face_vec in detected_face_vectors:
+                    for t_type, t_id, t_name, t_embedding in all_targets:
+                        sim = calculate_cosine_similarity(face_vec, t_embedding)
+                        print(f"Comparing face in photo {photo_id} with {t_type} {t_name}. Cosine Similarity: {sim:.4f}")
+                        if sim > 0.85: # 0.85 is our vector matching threshold
+                            if t_type == "client":
+                                matched_client_ids.append(t_id)
+                                matched_client_names.append(t_name)
+                            else:
+                                matched_guest_ids.append(t_id)
+                                matched_guest_names.append(t_name)
+                                
+                                # Log simulated WhatsApp message sent to the guest!
+                                log_message(
+                                    db,
+                                    studio_id=gallery.studio_id,
+                                    client_id=None,
+                                    subject="WhatsApp Auto-Notification",
+                                    body=f"Sent WhatsApp alert to guest '{t_name}' (WhatsApp: {t_name}'s registered number) containing their match link: http://localhost:5173/public/guest/{t_id}/gallery",
+                                    channel="WhatsApp"
+                                )
+                                # Log simulated Email notification as well
+                                log_message(
+                                    db,
+                                    studio_id=gallery.studio_id,
+                                    client_id=None,
+                                    subject=f"Photos from wedding: We found you!",
+                                    body=f"Hi {t_name}, the wedding photographer tagged you in a new snapshot! View it here: http://localhost:5173/public/guest/{t_id}/gallery",
+                                    channel="Email"
+                                )
+
+            # Build final tags list
+            base_tags = ["Sharp", "Outdoor", "Candid", "High Composition"]
+            for name in matched_client_names:
+                base_tags.append(f"Found: {name}")
+            for name in matched_guest_names:
+                base_tags.append(f"Guest: {name}")
+                
+            photo.ai_tags = base_tags
+            photo.matched_clients = matched_client_ids
+            photo.matched_guests = matched_guest_ids
             db.commit()
-            print(f"Background AI processing complete for photo: {photo_id}")
+            print(f"Background AI culling & face match processing complete for photo: {photo_id}")
     except Exception as e:
         print(f"Error in background AI task: {e}")
     finally:
@@ -971,3 +1073,131 @@ async def upload_guest_wedding_photo(
     db.refresh(db_photo)
 
     return db_photo
+
+
+@app.post("/api/public/wedding/{booking_id}/register-guest")
+async def register_wedding_guest(
+    booking_id: str,
+    name: str = Form(...),
+    email: str = Form(...),
+    phone: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _ = Depends(public_limiter)
+):
+    booking = db.query(models.Booking).filter(models.Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Wedding booking not found")
+
+    # 1. Cap File Size to 5MB
+    MAX_FILE_SIZE = 5 * 1024 * 1024
+    contents = await file.read()
+    if len(contents) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="File too large. Maximum size is 5MB.")
+
+    # 2. Verify Magic Bytes (JPEGs and PNGs only)
+    is_jpeg = contents.startswith(b'\xff\xd8\xff')
+    is_png = contents.startswith(b'\x89PNG\r\n\x1a\n')
+    if not is_jpeg and not is_png:
+        raise HTTPException(status_code=400, detail="Invalid image format. Only JPEGs and PNGs are accepted.")
+
+    # 3. Generate stable, mock 128-dimensional face embedding vector
+    import hashlib
+    import math
+    h = hashlib.sha256(f"guest-{booking_id}-{email}-{file.filename}".encode("utf-8")).digest()
+
+    raw_vector = []
+    vector_sum = 0.0
+    for i in range(128):
+        byte_val = h[i % len(h)]
+        val = math.sin(byte_val + i) # Generate floats between -1 and 1
+        raw_vector.append(val)
+        vector_sum += val * val
+
+    # Normalize vector to unit length
+    norm = math.sqrt(vector_sum)
+    normalized_vector = [val / norm for val in raw_vector]
+
+    # 4. Save guest profile to DB
+    guest = models.WeddingGuest(
+        booking_id=booking_id,
+        name=name,
+        email=email,
+        phone=phone,
+        face_embedding=normalized_vector
+    )
+    db.add(guest)
+    db.commit()
+    db.refresh(guest)
+
+    # Log guest registration log
+    log_message(
+        db,
+        studio_id=booking.studio_id,
+        client_id=None,
+        subject=f"Guest Registered: {name}",
+        body=f"Guest '{name}' registered via QR Code at wedding. WhatsApp: {phone}.",
+        channel="System"
+    )
+
+    return {
+        "status": "success",
+        "guest_id": guest.id,
+        "guest_name": guest.name
+    }
+
+
+@app.get("/api/public/guest/{guest_id}/gallery")
+def get_public_guest_gallery(guest_id: str, db: Session = Depends(get_db), _ = Depends(public_limiter)):
+    guest = db.query(models.WeddingGuest).filter(models.WeddingGuest.id == guest_id).first()
+    if not guest:
+        raise HTTPException(status_code=404, detail="Registered wedding guest profile not found")
+
+    booking = db.query(models.Booking).filter(models.Booking.id == guest.booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Wedding event associated with this guest not found")
+
+    # Find the active gallery for this booking
+    gallery = db.query(models.Gallery).filter(models.Gallery.booking_id == booking.id).first()
+    
+    # Query all photos in this gallery where this guest's ID is in the matched_guests array
+    matched_photos = []
+    if gallery:
+        all_photos = db.query(models.Photo).filter(models.Photo.gallery_id == gallery.id).all()
+        for p in all_photos:
+            # Check if this guest's ID is present in the photo's matched_guests list
+            if p.matched_guests and guest_id in p.matched_guests:
+                matched_photos.append(p)
+            elif p.ai_tags and f"Guest: {guest.name}" in p.ai_tags:
+                # Include tags generated by our culler
+                matched_photos.append(p)
+
+    client = db.query(models.Client).filter(models.Client.id == booking.client_id).first()
+    client_name = client.name if client else "Newlyweds"
+    
+    studio = db.query(models.Studio).filter(models.Studio.id == booking.studio_id).first()
+    studio_name = studio.name if studio else "Your Studio"
+
+    return {
+        "guest": {
+            "id": guest.id,
+            "name": guest.name,
+            "email": guest.email,
+            "phone": guest.phone
+        },
+        "wedding": {
+            "booking_id": booking.id,
+            "client_name": client_name,
+            "studio_name": studio_name,
+            "scheduled_at": booking.scheduled_at
+        },
+        "photos": [
+            {
+                "id": p.id,
+                "original_url": p.original_url,
+                "edited_url": p.edited_url,
+                "is_selected": p.is_selected,
+                "ai_tags": p.ai_tags
+            } for p in matched_photos
+        ]
+    }
