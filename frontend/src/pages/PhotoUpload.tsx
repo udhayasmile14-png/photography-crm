@@ -41,6 +41,14 @@ interface Booking {
   };
 }
 
+interface QueueItem {
+  id: string;
+  file: File;
+  status: 'pending' | 'uploading' | 'completed' | 'failed';
+  progress: number;
+  error?: string;
+}
+
 const PhotoUpload: React.FC = () => {
   const { token } = useAuth();
   
@@ -50,8 +58,8 @@ const PhotoUpload: React.FC = () => {
   const [selectedGalleryId, setSelectedGalleryId] = useState('');
   const [loading, setLoading] = useState(true);
   
-  // File Upload states
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  // Batch Upload queue states
+  const [uploadQueue, setUploadQueue] = useState<QueueItem[]>([]);
   const [uploadProgress, setUploadProgress] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -128,7 +136,13 @@ const PhotoUpload: React.FC = () => {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      setSelectedFile(e.target.files[0]);
+      const newItems: QueueItem[] = Array.from(e.target.files).map(file => ({
+        id: Math.random().toString(36).substring(7),
+        file,
+        status: 'pending',
+        progress: 0
+      }));
+      setUploadQueue(prev => [...prev, ...newItems]);
       setSuccessMsg(null);
       setErrorMsg(null);
     }
@@ -173,46 +187,111 @@ const PhotoUpload: React.FC = () => {
     }
   };
 
+  const uploadSingleFile = (item: QueueItem): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      setUploadQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'uploading' } : q));
+
+      const formData = new FormData();
+      formData.append('file', item.file);
+      formData.append('gallery_id', selectedGalleryId);
+      formData.append('category', category);
+      formData.append('color_preset', colorPreset);
+      formData.append('cull_blinks', String(cullBlinks));
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/photos/upload');
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const percent = Math.round((event.loaded / event.total) * 100);
+          setUploadQueue(prev => prev.map(q => q.id === item.id ? { ...q, progress: percent } : q));
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          setUploadQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'completed', progress: 100 } : q));
+          resolve();
+        } else {
+          let detail = 'Upload failed';
+          try {
+            const errJson = JSON.parse(xhr.responseText);
+            detail = errJson.detail || detail;
+          } catch (e) {}
+          setUploadQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'failed', error: detail } : q));
+          reject(new Error(detail));
+        }
+      };
+
+      xhr.onerror = () => {
+        const detail = 'Network error during upload';
+        setUploadQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'failed', error: detail } : q));
+        reject(new Error(detail));
+      };
+
+      xhr.send(formData);
+    });
+  };
+
   const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedFile || !selectedGalleryId) return;
-    
+    if (uploadQueue.length === 0 || !selectedGalleryId) return;
+
     setUploadProgress(true);
     setSuccessMsg(null);
     setErrorMsg(null);
 
-    const formData = new FormData();
-    formData.append('file', selectedFile);
-    formData.append('gallery_id', selectedGalleryId);
-    formData.append('category', category);
-    formData.append('color_preset', colorPreset);
-    formData.append('cull_blinks', String(cullBlinks));
+    const pendingItems = uploadQueue.filter(item => item.status === 'pending');
+    if (pendingItems.length === 0) {
+      setUploadProgress(false);
+      return;
+    }
+
+    const CONCURRENCY_LIMIT = 3;
+    let index = 0;
+    const activeUploads: Promise<void>[] = [];
+
+    const startNext = async (): Promise<void> => {
+      if (index >= pendingItems.length) return;
+      const currentItem = pendingItems[index++];
+      
+      const uploadPromise = uploadSingleFile(currentItem);
+      activeUploads.push(uploadPromise);
+
+      await uploadPromise.catch(() => {});
+      activeUploads.splice(activeUploads.indexOf(uploadPromise), 1);
+      await startNext();
+    };
+
+    const initialSpawns = [];
+    for (let i = 0; i < Math.min(CONCURRENCY_LIMIT, pendingItems.length); i++) {
+      initialSpawns.push(startNext());
+    }
 
     try {
-      const response = await fetch('/api/photos/upload', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
-      });
-
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.detail || 'Upload failed. File size or format may be invalid.');
-      }
-
-      setSuccessMsg(`Uploaded successfully! The AI background culler is analyzing tags.`);
-      setSelectedFile(null);
+      await Promise.all(initialSpawns);
       
-      const fileInput = document.getElementById('photo-file-input') as HTMLInputElement;
-      if (fileInput) fileInput.value = '';
-
-      fetchGalleries();
+      // Delay reading fresh status state
+      setTimeout(() => {
+        setUploadQueue(prev => {
+          const failedCount = prev.filter(q => q.status === 'failed').length;
+          if (failedCount > 0) {
+            setErrorMsg(`Ingest complete. ${failedCount} uploads failed.`);
+          } else {
+            setSuccessMsg(`All ${pendingItems.length} photos uploaded successfully! AI is culling.`);
+            setUploadQueue([]);
+          }
+          fetchGalleries();
+          return prev;
+        });
+      }, 300);
     } catch (err: any) {
-      setErrorMsg(err.message || 'Error uploading file.');
+      setErrorMsg(err.message || 'Error occurred during batch upload.');
     } finally {
       setUploadProgress(false);
+      const fileInput = document.getElementById('photo-file-input') as HTMLInputElement;
+      if (fileInput) fileInput.value = '';
     }
   };
 
@@ -235,8 +314,6 @@ const PhotoUpload: React.FC = () => {
   };
 
   const selectedGallery = galleries.find(g => g.id === selectedGalleryId);
-
-  // Filter bookings that do not have active galleries yet
   const availableBookings = bookings.filter(b => !galleries.some(g => g.booking_id === b.id));
 
   if (loading) {
@@ -458,7 +535,7 @@ const PhotoUpload: React.FC = () => {
                 </div>
 
                 <div className="form-group" style={{ marginBottom: '1.5rem' }}>
-                  <label className="form-label">Choose Image File *</label>
+                  <label className="form-label">Choose Image Files *</label>
                   <div style={{
                     border: '2px dashed var(--border-color)',
                     borderRadius: 'var(--radius-md)',
@@ -472,6 +549,7 @@ const PhotoUpload: React.FC = () => {
                       type="file"
                       id="photo-file-input"
                       accept=".jpg,.jpeg,.png"
+                      multiple
                       onChange={handleFileChange}
                       style={{
                         position: 'absolute',
@@ -481,31 +559,79 @@ const PhotoUpload: React.FC = () => {
                       disabled={uploadProgress}
                     />
                     <FileImage size={32} color="var(--text-muted)" style={{ marginBottom: '0.5rem' }} />
-                    {selectedFile ? (
-                      <div style={{ fontSize: '0.9rem', color: 'var(--text-primary)', fontWeight: 600 }}>
-                        {selectedFile.name} ({(selectedFile.size / (1024 * 1024)).toFixed(2)} MB)
-                      </div>
-                    ) : (
-                      <div>
-                        <div style={{ fontSize: '0.9rem', color: 'var(--text-primary)', fontWeight: 500 }}>Click to browse files</div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>JPEG or PNG (Max size: 5MB)</div>
-                      </div>
-                    )}
+                    <div>
+                      <div style={{ fontSize: '0.9rem', color: 'var(--text-primary)', fontWeight: 500 }}>Click to browse files</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>JPEGs or PNGs (Batch limit: 50 files)</div>
+                    </div>
                   </div>
+
+                  {/* Active Upload Ingest Queue monitor */}
+                  {uploadQueue.length > 0 && (
+                    <div style={{
+                      marginTop: '1.25rem',
+                      background: 'hsla(230, 20%, 8%, 0.5)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '0.75rem',
+                      maxHeight: '220px',
+                      overflowY: 'auto'
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.35rem' }}>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600 }}>Active Ingest Queue ({uploadQueue.length})</span>
+                        <button
+                          type="button"
+                          onClick={() => setUploadQueue([])}
+                          style={{ background: 'none', border: 'none', color: 'var(--accent-red)', fontSize: '0.7rem', cursor: 'pointer', fontWeight: 600 }}
+                          disabled={uploadProgress}
+                        >
+                          Clear Queue
+                        </button>
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        {uploadQueue.map(item => (
+                          <div key={item.id} style={{ fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '180px', fontWeight: 500 }}>
+                                {item.file.name}
+                              </span>
+                              <span style={{ fontSize: '0.7rem', fontWeight: 600, color: item.status === 'completed' ? 'var(--accent-emerald)' : item.status === 'failed' ? 'var(--accent-red)' : item.status === 'uploading' ? 'var(--accent-purple)' : 'var(--text-muted)' }}>
+                                {item.status === 'uploading' ? `Uploading ${item.progress}%` : item.status.toUpperCase()}
+                              </span>
+                            </div>
+                            
+                            <div style={{ background: 'var(--border-color)', height: '4px', borderRadius: '2px', overflow: 'hidden' }}>
+                              <div style={{ 
+                                background: item.status === 'completed' ? 'var(--accent-emerald)' : item.status === 'failed' ? 'var(--accent-red)' : 'var(--accent-purple)', 
+                                width: `${item.progress}%`, 
+                                height: '100%' 
+                              }} />
+                            </div>
+                            {item.error && (
+                              <div style={{ fontSize: '0.65rem', color: 'var(--accent-red)', marginTop: '0.1rem' }}>
+                                ❌ {item.error}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                 </div>
 
                 <button
                   type="submit"
                   className="btn btn-primary"
                   style={{ width: '100%', padding: '0.85rem' }}
-                  disabled={uploadProgress || !selectedFile}
+                  disabled={uploadProgress || uploadQueue.length === 0}
                 >
                   {uploadProgress ? (
                     <>
                       <Loader2 className="animate-spin" size={16} />
-                      <span style={{ marginLeft: '0.5rem' }}>Processing Ingest...</span>
+                      <span style={{ marginLeft: '0.5rem' }}>Processing Ingest Queue...</span>
                     </>
-                  ) : 'Upload and Process'}
+                  ) : 'Upload and Process Queue'}
                 </button>
               </form>
             </div>
