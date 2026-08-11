@@ -2,7 +2,7 @@ import datetime
 from typing import List, Optional
 import os
 import uuid
-from fastapi import FastAPI, Depends, HTTPException, status, Query, File, UploadFile, Form, Request, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, status, Query, File, UploadFile, Form, Request, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
@@ -24,6 +24,60 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ----------------- WebSocket Live Manager -----------------
+import asyncio
+import tasks
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: dict[str, list[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, studio_id: str):
+        await websocket.accept()
+        if studio_id not in self.active_connections:
+            self.active_connections[studio_id] = []
+        self.active_connections[studio_id].append(websocket)
+
+    def disconnect(self, websocket: WebSocket, studio_id: str):
+        if studio_id in self.active_connections:
+            if websocket in self.active_connections[studio_id]:
+                self.active_connections[studio_id].remove(websocket)
+            if not self.active_connections[studio_id]:
+                del self.active_connections[studio_id]
+
+    async def broadcast_to_studio(self, message: dict, studio_id: str):
+        if studio_id in self.active_connections:
+            for connection in self.active_connections[studio_id]:
+                try:
+                    await connection.send_json(message)
+                except Exception:
+                    pass
+
+manager = ConnectionManager()
+
+def notify_ws_studio(studio_id: str, message: dict):
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(manager.broadcast_to_studio(message, studio_id))
+        else:
+            loop.run_until_complete(manager.broadcast_to_studio(message, studio_id))
+    except Exception as e:
+        print("WebSocket broadcast failed:", e)
+
+# Connect main ws notifier to tasks module
+tasks.ws_notifier = notify_ws_studio
+
+@app.websocket("/api/ws/{studio_id}")
+async def websocket_endpoint(websocket: WebSocket, studio_id: str):
+    await manager.connect(websocket, studio_id)
+    try:
+        while True:
+            # Maintain active connection stream
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, studio_id)
 
 # ----------------- Rate Limiters -----------------
 # Limit public endpoints to prevent abuse: max 15 requests/minute

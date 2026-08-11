@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate, Link, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Link, useLocation, useNavigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -24,7 +24,9 @@ import {
   FileText, 
   LogOut, 
   UserCircle,
-  Heart
+  Heart,
+  Sparkles,
+  X
 } from 'lucide-react';
 
 import './styles/theme.css';
@@ -37,8 +39,66 @@ const PrivateRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => 
 
 // Layout with sidebar navigation
 const DashboardLayout: React.FC = () => {
-  const { studioName, userName, logout } = useAuth();
+  const { studioId, studioName, userName, logout } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
+
+  const [toast, setToast] = React.useState<{ id: string; title: string; bookingId: string; rejected: number; total: number } | null>(null);
+
+  React.useEffect(() => {
+    if (!studioId) return;
+
+    // Determine WS protocol based on page host
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${wsProto}//${window.location.host}/api/ws/${studioId}`;
+
+    let ws: WebSocket;
+    let reconnectTimeout: any;
+
+    const connect = () => {
+      ws = new WebSocket(wsUrl);
+
+      ws.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === 'culling_complete') {
+            setToast({
+              id: payload.photo_id,
+              title: payload.gallery_title,
+              bookingId: payload.booking_id,
+              rejected: payload.rejected_photos,
+              total: payload.total_photos
+            });
+          }
+        } catch (err) {
+          console.error('Error parsing WS message:', err);
+        }
+      };
+
+      ws.onclose = () => {
+        reconnectTimeout = setTimeout(connect, 5000);
+      };
+
+      ws.onerror = (err) => {
+        console.error('WS Error:', err);
+      };
+    };
+
+    connect();
+
+    return () => {
+      if (ws) ws.close();
+      clearTimeout(reconnectTimeout);
+    };
+  }, [studioId]);
+
+  React.useEffect(() => {
+    if (!toast) return;
+    const timeout = setTimeout(() => {
+      setToast(null);
+    }, 8000);
+    return () => clearTimeout(timeout);
+  }, [toast]);
 
   const menuItems = [
     { path: '/dashboard', label: 'Overview', icon: <LayoutDashboard size={20} /> },
@@ -52,6 +112,55 @@ const DashboardLayout: React.FC = () => {
 
   return (
     <div className="app-container">
+      {/* Slide-in Toast popup overlay */}
+      {toast && (
+        <div style={{
+          position: 'fixed',
+          top: '1.5rem',
+          right: '1.5rem',
+          zIndex: 9999,
+          width: '320px',
+          background: 'rgba(15, 23, 42, 0.95)',
+          backdropFilter: 'blur(16px)',
+          border: '1px solid var(--accent-purple)',
+          borderRadius: 'var(--radius-md)',
+          padding: '1.25rem',
+          color: '#fff',
+          boxShadow: '0 10px 40px rgba(124, 58, 237, 0.3)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.75rem',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontWeight: 700, fontSize: '0.85rem', color: 'var(--accent-purple)' }}>
+              <Sparkles size={14} />
+              <span>AI APERTURE ALERT</span>
+            </span>
+            <button 
+              onClick={() => setToast(null)} 
+              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0 }}
+            >
+              <X size={16} />
+            </button>
+          </div>
+          <div style={{ fontSize: '0.8rem', lineHeight: '1.4' }}>
+            AI culling completely finished for <strong>{toast.title}</strong>!
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+              Processed: {toast.total} images | Flagged duplicates/blinks: {toast.rejected}
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              setToast(null);
+              navigate(`/dashboard/jobs/${toast.bookingId}/review`);
+            }}
+            className="btn btn-primary"
+            style={{ fontSize: '0.75rem', padding: '0.45rem', width: '100%', justifyContent: 'center' }}
+          >
+            Open Review Workspace
+          </button>
+        </div>
+      )}
       <aside className="sidebar">
         <div>
           <div className="sidebar-brand">

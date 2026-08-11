@@ -15,6 +15,8 @@ from celery_app import celery_app
 import models
 from database import engine, SessionLocal
 
+ws_notifier = None
+
 # ==========================================
 # 📧 SMTP Real Email Dispatcher
 # ==========================================
@@ -504,6 +506,20 @@ def process_photo_face_matching(photo_id: str, cull_blinks: bool = True, color_p
         culling_job.avg_sharpness = avg_sharp
         culling_job.status = "review" # Move state to review once culling is completed
         db.commit()
+
+        # Trigger live WebSocket alert
+        if ws_notifier:
+            try:
+                ws_notifier(gallery.studio_id, {
+                    "type": "culling_complete",
+                    "booking_id": gallery.booking_id,
+                    "gallery_title": gallery.title,
+                    "photo_id": photo_id,
+                    "rejected_photos": rejected_count,
+                    "total_photos": len(gallery_photos)
+                })
+            except Exception as ws_err:
+                print(f"WS notification failed: {ws_err}")
 
         print(f"Celery AI processing completely succeeded for photo: {photo_id}")
         
