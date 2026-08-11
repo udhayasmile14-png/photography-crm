@@ -13,7 +13,9 @@ import {
   ThumbsUp,
   ThumbsDown,
   Layers,
-  Star
+  Star,
+  Download,
+  CheckCircle
 } from 'lucide-react';
 
 interface Photo {
@@ -28,6 +30,7 @@ interface Photo {
   cull_status: string;
   ai_tags: string[] | null;
   is_hero: boolean;
+  is_selected: boolean;
 }
 
 interface JobStatus {
@@ -53,6 +56,7 @@ const PhotoReview: React.FC = () => {
   const [clientName, setClientName] = useState('Client');
   const [galleryTitle, setGalleryTitle] = useState('Wedding Album');
   const [galleryId, setGalleryId] = useState('');
+  const [albumSubmitted, setAlbumSubmitted] = useState(false);
 
   const fetchJobDetails = async () => {
     try {
@@ -85,6 +89,7 @@ const PhotoReview: React.FC = () => {
           setGalleryTitle(activeGallery.title);
           setGalleryId(activeGallery.id);
           setPhotos(activeGallery.photos || []);
+          setAlbumSubmitted(activeGallery.album_submitted || false);
         }
       }
     } catch (err) {
@@ -476,6 +481,66 @@ const PhotoReview: React.FC = () => {
                 </div>
 
               </div>
+
+              {/* Printed Album Export Panel */}
+              {albumSubmitted && (
+                <div className="glass-panel" style={{ padding: '1.5rem', border: '1px solid var(--accent-emerald)', marginTop: '1.5rem' }}>
+                  <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent-emerald)' }}>
+                    <CheckCircle size={16} />
+                    <span>Printed Album Final Selections</span>
+                  </h3>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '1rem', lineHeight: '1.4' }}>
+                    The client has locked and submitted their selections! Download the printable CSV spreadsheet or copy the index path list.
+                  </p>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    {/* Category counts */}
+                    <div style={{ background: 'hsla(230, 20%, 10%, 0.4)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>💍 Couples selected:</span>
+                        <span style={{ fontWeight: 600 }}>{photos.filter(p => p.is_selected && p.category === 'couple').length} photos</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>📸 Traditional selected:</span>
+                        <span style={{ fontWeight: 600 }}>{photos.filter(p => p.is_selected && p.category === 'traditional').length} photos</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>✨ Candids selected:</span>
+                        <span style={{ fontWeight: 600 }}>{photos.filter(p => p.is_selected && p.category === 'candid').length} photos</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--border-color)', paddingTop: '0.35rem', marginTop: '0.15rem', fontWeight: 700 }}>
+                        <span>Total Album Picks:</span>
+                        <span>{photos.filter(p => p.is_selected).length} photos</span>
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <a 
+                      href={`/api/galleries/${galleryId}/export-csv?token=${encodeURIComponent(token || '')}`}
+                      download
+                      className="btn btn-primary"
+                      style={{ textDecoration: 'none', justifyContent: 'center', fontSize: '0.8rem', padding: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                    >
+                      <Download size={14} />
+                      <span>Download CSV Index</span>
+                    </a>
+
+                    {/* Copy list */}
+                    <button
+                      onClick={() => {
+                        const selectedPhotos = photos.filter(p => p.is_selected);
+                        const filenames = selectedPhotos.map(p => p.original_url.split('/').pop()?.split('?')[0] || '').join('\n');
+                        navigator.clipboard.writeText(filenames);
+                        alert('Copied selected image filenames to clipboard!');
+                      }}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '0.8rem', padding: '0.5rem', justifyContent: 'center' }}
+                    >
+                      📋 Copy Filename List
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
           </div>

@@ -162,6 +162,7 @@ class GalleryBase(BaseModel):
     title: str
     status: Optional[str] = "Draft"
     expires_at: Optional[datetime] = None
+    album_submitted: Optional[bool] = False
 
 class GalleryCreate(GalleryBase):
     pass

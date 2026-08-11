@@ -1494,6 +1494,71 @@ def toggle_photo_hero_status(
     return {"status": "success", "photo_id": photo_id, "is_hero": photo.is_hero}
 
 
+@app.get("/api/galleries/{gallery_id}/export-csv")
+def export_selected_photos_csv(
+    gallery_id: str,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    from fastapi.responses import StreamingResponse
+    import io
+    import csv
+
+    # Verify ownership
+    gallery = db.query(models.Gallery).filter(
+        models.Gallery.id == gallery_id,
+        models.Gallery.studio_id == current_user.studio_id
+    ).first()
+    if not gallery:
+        raise HTTPException(status_code=404, detail="Gallery not found")
+
+    # Fetch selected photos
+    photos = db.query(models.Photo).filter(
+        models.Photo.gallery_id == gallery_id,
+        models.Photo.is_selected == True
+    ).all()
+
+    # Generate CSV in memory
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Write Headers
+    writer.writerow([
+        "Photo ID", 
+        "Category", 
+        "Original Filename", 
+        "Original URL", 
+        "Edited URL", 
+        "Sharpness Score", 
+        "Exposure Score", 
+        "AI Tags"
+    ])
+    
+    # Write rows
+    for p in photos:
+        filename = p.original_url.split("/")[-1].split("?")[0]
+        tags = ",".join(p.ai_tags) if p.ai_tags else ""
+        writer.writerow([
+            p.id,
+            p.category,
+            filename,
+            p.original_url,
+            p.edited_url or "",
+            p.sharpness_score,
+            p.exposure_score,
+            tags
+        ])
+        
+    output.seek(0)
+    
+    safe_title = gallery.title.lower().replace(" ", "_")
+    return StreamingResponse(
+        output,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={safe_title}_album_selections.csv"}
+    )
+
+
 # ----------------- Client Album Builder Submission -----------------
 
 @app.post("/api/public/galleries/{gallery_id}/submit-album")
