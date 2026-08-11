@@ -9,7 +9,8 @@ import {
   Copy,
   Check,
   X,
-  Loader2
+  Loader2,
+  AlertCircle
 } from 'lucide-react';
 
 interface Client {
@@ -44,6 +45,7 @@ const Clients: React.FC = () => {
   
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [submitLoading, setSubmitLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const fetchClients = async (query = '') => {
     try {
@@ -72,8 +74,9 @@ const Clients: React.FC = () => {
 
   const handleCreateClient = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newName || !newEmail) return;
+    if (!newName.trim() || !newEmail.trim()) return;
     setSubmitLoading(true);
+    setErrorMsg(null);
 
     try {
       const response = await fetch('/api/clients', {
@@ -83,13 +86,13 @@ const Clients: React.FC = () => {
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          name: newName,
-          email: newEmail,
-          phone: newPhone || null,
+          name: newName.trim(),
+          email: newEmail.trim(),
+          phone: newPhone.trim() || null,
           source: newSource,
           preferences: {
-            style: newStyle || undefined,
-            notes: newNotes || undefined
+            style: newStyle.trim() || undefined,
+            notes: newNotes.trim() || undefined
           }
         })
       });
@@ -102,11 +105,15 @@ const Clients: React.FC = () => {
         setNewSource('Website');
         setNewStyle('');
         setNewNotes('');
+        setErrorMsg(null);
         setShowModal(false);
         fetchClients(search);
+      } else {
+        const errData = await response.json().catch(() => ({}));
+        setErrorMsg(errData.detail || 'Failed to save client details. Verify email is valid.');
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Error occurred while saving client.');
     } finally {
       setSubmitLoading(false);
     }
@@ -317,6 +324,22 @@ const Clients: React.FC = () => {
             <h2 style={{ fontSize: '1.5rem', marginBottom: '1.5rem' }}>Create Client Record</h2>
 
             <form onSubmit={handleCreateClient}>
+              {errorMsg && (
+                <div style={{
+                  display: 'flex',
+                  gap: '0.5rem',
+                  backgroundColor: 'hsla(350, 80%, 60%, 0.15)',
+                  border: '1px solid hsla(350, 80%, 60%, 0.3)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '0.75rem 1rem',
+                  marginBottom: '1.25rem',
+                  color: 'var(--accent-red)',
+                  fontSize: '0.85rem'
+                }}>
+                  <AlertCircle size={18} style={{ flexShrink: 0 }} />
+                  <span>{errorMsg}</span>
+                </div>
+              )}
               <div className="form-group">
                 <label className="form-label">Client Name *</label>
                 <input
