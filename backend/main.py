@@ -31,20 +31,7 @@ public_limiter = RateLimiter(max_requests=15, window_seconds=60)
 # Limit image upload endpoints: max 5 requests/minute
 upload_limiter = RateLimiter(max_requests=5, window_seconds=60)
 
-# Helper to log messages in database
-def log_message(db: Session, studio_id: str, client_id: str, subject: str, body: str, channel: str = "Email"):
-    msg = models.MessageLog(
-        studio_id=studio_id,
-        client_id=client_id,
-        subject=subject,
-        body=body,
-        channel=channel,
-        status="Sent"
-    )
-    db.add(msg)
-    db.commit()
-
-# ----------------- Auth Endpoints -----------------
+# Auth Endpoints -----------------
 
 @app.post("/api/auth/register", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED)
 def register_studio(user_in: schemas.UserCreate, db: Session = Depends(get_db)):
@@ -525,130 +512,80 @@ def get_contract_by_id(
     return contract
 
 
-# ----------------- Image Upload (Photographer dashboard) -----------------
-
-def calculate_cosine_similarity(v1: list, v2: list) -> float:
-    if not v1 or not v2 or len(v1) != len(v2):
-        return 0.0
-    import math
-    dot_product = sum(x * y for x, y in zip(v1, v2))
-    norm_v1 = math.sqrt(sum(x * x for x in v1))
-    norm_v2 = math.sqrt(sum(y * y for y in v2))
-    if norm_v1 == 0.0 or norm_v2 == 0.0:
-        return 0.0
-    return dot_product / (norm_v1 * norm_v2)
+# Import SFace, alignment, matching, message log, and Celery task helpers
+from tasks import (
+    align_face,
+    extract_face_embedding,
+    calculate_cosine_similarity,
+    log_message,
+    process_photo_face_matching,
+    send_smtp_email
+)
 
 
-def background_ai_processing(photo_id: str, db_session_factory):
-    # Runs asynchronously in a background thread so upload isn't blocked.
-    db = db_session_factory()
-    try:
-        photo = db.query(models.Photo).filter(models.Photo.id == photo_id).first()
-        if photo:
-            import os
+def upload_file_to_storage(filename: str, file_bytes: bytes) -> str:
+    """
+    Uploads file to AWS S3 bucket if configured.
+    Otherwise, saves to local uploads folder.
+    Returns the public URL path or local path (e.g. /uploads/filename.jpg).
+    """
+    import os
+    import boto3
+    
+    s3_bucket = os.getenv("AWS_S3_BUCKET")
+    aws_key = os.getenv("AWS_ACCESS_KEY_ID")
+    aws_secret = os.getenv("AWS_SECRET_ACCESS_KEY")
+    
+    if all([s3_bucket, aws_key, aws_secret]):
+        try:
+            s3_client = boto3.client(
+                "s3",
+                aws_access_key_id=aws_key,
+                aws_secret_access_key=aws_secret,
+                region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+            )
+            s3_client.put_object(
+                Bucket=s3_bucket,
+                Key=filename,
+                Body=file_bytes,
+                ACL="public-read"
+            )
+            s3_url = f"https://{s3_bucket}.s3.amazonaws.com/{filename}"
+            print(f"[Storage] Successfully uploaded {filename} to AWS S3.")
+            return s3_url
+        except Exception as e:
+            print(f"[Storage Exception] AWS S3 upload failed: {e}. Falling back to local disk.")
             
-            # Fetch the studio ID from the gallery
-            gallery = db.query(models.Gallery).filter(models.Gallery.id == photo.gallery_id).first()
-            
-            matched_client_ids = []
-            matched_client_names = []
-            matched_guest_ids = []
-            matched_guest_names = []
-            
-            if gallery:
-                # Query all consented clients of the studio with face profiles
-                clients = db.query(models.Client).filter(
-                    models.Client.studio_id == gallery.studio_id,
-                    models.Client.face_recognition_consent == True,
-                    models.Client.face_embedding != None
-                ).all()
-                
-                # Query all registered wedding guests for this wedding booking ID
-                guests = db.query(models.WeddingGuest).filter(
-                    models.WeddingGuest.booking_id == gallery.booking_id,
-                    models.WeddingGuest.face_embedding != None
-                ).all()
-                
-                # Combine targets for face comparison
-                all_targets = [] # list of tuples: (type, id, name, embedding)
-                for c in clients:
-                    all_targets.append(("client", c.id, c.name, c.face_embedding))
-                for g in guests:
-                    all_targets.append(("guest", g.id, g.name, g.face_embedding))
-                
-                # 1. Run actual face detection and alignment on the uploaded photographer photo
-                base_dir = os.path.dirname(os.path.abspath(__file__))
-                photo_filename = os.path.basename(photo.original_url)
-                photo_path = os.path.join(base_dir, "..", "uploads", photo_filename)
-                
-                if os.path.exists(photo_path):
-                    # Align faces (saves crops to uploads/aligned_faces/ at size 112x112)
-                    aligned_crops = align_face(photo_path)
-                    
-                    # 2. Extract actual embeddings from each detected face and match them
-                    for crop_rel_path in aligned_crops:
-                        crop_filename = os.path.basename(crop_rel_path)
-                        crop_absolute_path = os.path.join(base_dir, "..", "uploads", "aligned_faces", crop_filename)
-                        
-                        face_embedding = extract_face_embedding(crop_absolute_path)
-                        if face_embedding:
-                            # Save face embedding to the database under photos_faces table
-                            db_face = models.PhotoFace(
-                                photo_id=photo_id,
-                                face_embedding=face_embedding
-                            )
-                            db.add(db_face)
-                            
-                            for t_type, t_id, t_name, t_embedding in all_targets:
-                                sim = calculate_cosine_similarity(face_embedding, t_embedding)
-                                print(f"CNN Compare: photo {photo_id} face crop with {t_type} {t_name}. Cosine Similarity: {sim:.4f}")
-                                
-                                # SFace default cosine similarity threshold is 0.363. We use 0.365 for security
-                                if sim > 0.365:
-                                    if t_type == "client":
-                                        if t_id not in matched_client_ids:
-                                            matched_client_ids.append(t_id)
-                                            matched_client_names.append(t_name)
-                                    else:
-                                        if t_id not in matched_guest_ids:
-                                            matched_guest_ids.append(t_id)
-                                            matched_guest_names.append(t_name)
-                                            
-                                            # Log simulated WhatsApp message sent to the guest
-                                            log_message(
-                                                db,
-                                                studio_id=gallery.studio_id,
-                                                client_id=None,
-                                                subject="WhatsApp Auto-Notification",
-                                                body=f"Sent WhatsApp alert to guest '{t_name}' (WhatsApp: {t_name}'s registered number) containing their match link: http://localhost:5173/public/guest/{t_id}/gallery",
-                                                channel="WhatsApp"
-                                            )
-                                            # Log simulated Email notification
-                                            log_message(
-                                                db,
-                                                studio_id=gallery.studio_id,
-                                                client_id=None,
-                                                subject=f"Photos from wedding: We found you!",
-                                                body=f"Hi {t_name}, the wedding photographer tagged you in a new snapshot! View it here: http://localhost:5173/public/guest/{t_id}/gallery",
-                                                channel="Email"
-                                            )
+    # Local Disk Fallback
+    upload_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "uploads")
+    os.makedirs(upload_dir, exist_ok=True)
+    file_path = os.path.join(upload_dir, filename)
+    with open(file_path, "wb") as f:
+        f.write(file_bytes)
+    print(f"[Storage] Saved {filename} to local uploads folder.")
+    return f"/uploads/{filename}"
 
-            # Build final tags list
-            base_tags = ["Sharp", "Outdoor", "Candid", "High Composition"]
-            for name in matched_client_names:
-                base_tags.append(f"Found: {name}")
-            for name in matched_guest_names:
-                base_tags.append(f"Guest: {name}")
-                
-            photo.ai_tags = base_tags
-            photo.matched_clients = matched_client_ids
-            photo.matched_guests = matched_guest_ids
-            db.commit()
-            print(f"Background AI culling & face match processing complete for photo: {photo_id}")
-    except Exception as e:
-        print(f"Error in background AI task: {e}")
-    finally:
-        db.close()
+
+def trigger_background_processing(photo_id: str, background_tasks: BackgroundTasks):
+    """
+    Triggers background processing. 
+    If a Redis broker is configured, pushes to Celery.
+    Otherwise, falls back to FastAPI's BackgroundTasks.
+    """
+    import os
+    redis_broker = os.getenv("CELERY_BROKER_URL")
+    
+    if redis_broker:
+        try:
+            process_photo_face_matching.delay(photo_id)
+            print(f"[Queue] Pushed photo {photo_id} to Celery worker.")
+            return
+        except Exception as e:
+            print(f"[Queue Exception] Failed to push to Celery: {e}. Falling back to BackgroundTasks.")
+            
+    # Fallback to local execution
+    background_tasks.add_task(process_photo_face_matching, photo_id)
+    print(f"[Local Thread] Dispatched photo {photo_id} via FastAPI BackgroundTasks.")
 
 
 @app.post("/api/photos/upload", response_model=schemas.PhotoResponse)
@@ -686,23 +623,15 @@ async def upload_gallery_photo(
             detail="Invalid image format. Only JPEGs and PNGs are accepted."
         )
 
-    # 3. Store file outside of static web root (save to a local uploads directory)
-    upload_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "uploads")
-    os.makedirs(upload_dir, exist_ok=True)
-    
+    # 3. Store file using our dynamic S3/Local Storage helper
     file_ext = ".jpg" if is_jpeg else ".png"
     unique_filename = f"{uuid.uuid4()}{file_ext}"
-    file_path = os.path.join(upload_dir, unique_filename)
+    storage_url = upload_file_to_storage(unique_filename, contents)
 
-    with open(file_path, "wb") as f:
-        f.write(contents)
-
-    # In production, we would save this to S3 and store the signed URL in db.
-    # For local test, we store the file path (or a simulated URL path)
     db_photo = models.Photo(
         gallery_id=gallery_id,
-        original_url=f"/uploads/{unique_filename}",
-        edited_url=f"/uploads/{unique_filename}",
+        original_url=storage_url,
+        edited_url=storage_url,
         is_selected=False,
         ai_tags=["Processing..."]
     )
@@ -710,8 +639,8 @@ async def upload_gallery_photo(
     db.commit()
     db.refresh(db_photo)
 
-    # Trigger async background tasks
-    background_tasks.add_task(background_ai_processing, db_photo.id, SessionLocalFactory)
+    # Trigger async background task (Celery or BackgroundTasks fallback)
+    trigger_background_processing(db_photo.id, background_tasks)
 
     return db_photo
 
@@ -1195,6 +1124,7 @@ def get_public_wedding_info(booking_id: str, db: Session = Depends(get_db), _ = 
 @app.post("/api/public/wedding/{booking_id}/guest-upload", response_model=schemas.PhotoResponse)
 async def upload_guest_wedding_photo(
     booking_id: str,
+    background_tasks: BackgroundTasks,
     guest_name: str = Form(...),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
@@ -1237,22 +1167,16 @@ async def upload_guest_wedding_photo(
             detail="Invalid image format. Only JPEGs and PNGs are accepted."
         )
 
-    # 3. Store file on local disk uploads folder
-    upload_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "uploads")
-    os.makedirs(upload_dir, exist_ok=True)
-    
+    # 3. Store file using our dynamic S3/Local Storage helper
     file_ext = ".jpg" if is_jpeg else ".png"
     unique_filename = f"guest-{uuid.uuid4()}{file_ext}"
-    file_path = os.path.join(upload_dir, unique_filename)
-
-    with open(file_path, "wb") as f:
-        f.write(contents)
+    storage_url = upload_file_to_storage(unique_filename, contents)
 
     # 4. Insert photo record with Guest attribution tags
     db_photo = models.Photo(
         gallery_id=gallery.id,
-        original_url=f"/uploads/{unique_filename}",
-        edited_url=f"/uploads/{unique_filename}",
+        original_url=storage_url,
+        edited_url=storage_url,
         is_selected=False,
         ai_tags=["Guest Upload", f"By: {guest_name}"],
         uploaded_by_guest=guest_name,
@@ -1261,6 +1185,9 @@ async def upload_guest_wedding_photo(
     db.add(db_photo)
     db.commit()
     db.refresh(db_photo)
+
+    # Trigger async background face matching pipeline
+    trigger_background_processing(db_photo.id, background_tasks)
 
     return db_photo
 
