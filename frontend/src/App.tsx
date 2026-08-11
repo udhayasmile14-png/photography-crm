@@ -14,6 +14,7 @@ import GuestRegister from './pages/GuestRegister';
 import GuestPersonalGallery from './pages/GuestPersonalGallery';
 import ClientPortal from './pages/ClientPortal';
 import GalleryProofing from './pages/GalleryProofing';
+import PhotoReview from './pages/PhotoReview';
 
 import { 
   Camera, 
@@ -108,6 +109,7 @@ const DashboardLayout: React.FC = () => {
           <Route path="/invoices" element={<Invoices />} />
           <Route path="/contracts" element={<Contracts />} />
           <Route path="/upload" element={<PhotoUpload />} />
+          <Route path="/jobs/:bookingId/review" element={<PhotoReview />} />
           <Route path="/weddings" element={<Weddings />} />
         </Routes>
       </main>

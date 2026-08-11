@@ -104,6 +104,22 @@ class Booking(Base):
     galleries = relationship("Gallery", back_populates="booking", cascade="all, delete-orphan")
     contracts = relationship("Contract", back_populates="booking", cascade="all, delete-orphan")
     wedding_guests = relationship("WeddingGuest", back_populates="booking", cascade="all, delete-orphan")
+    culling_jobs = relationship("CullingJob", back_populates="booking", cascade="all, delete-orphan")
+
+
+class CullingJob(Base):
+    __tablename__ = "culling_jobs"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    booking_id = Column(String, ForeignKey("bookings.id", ondelete="CASCADE"), nullable=False)
+    status = Column(String, default="uploaded") # uploaded, culling, review, retouching, ready, delivered, invoiced
+    total_photos = Column(Integer, default=0)
+    rejected_photos = Column(Integer, default=0)
+    avg_sharpness = Column(Float, default=100.0)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    # Relationships
+    booking = relationship("Booking", back_populates="culling_jobs")
 
 
 class WeddingGuest(Base):
@@ -149,6 +165,10 @@ class Gallery(Base):
     title = Column(String, nullable=False)
     status = Column(String, default="Draft")
     expires_at = Column(DateTime, nullable=True)
+    quota_couple = Column(Integer, default=50)
+    quota_traditional = Column(Integer, default=30)
+    quota_candid = Column(Integer, default=20)
+    album_submitted = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     # Relationships
@@ -170,6 +190,18 @@ class Photo(Base):
     matched_guests = Column(JSON, nullable=True)
     uploaded_by_guest = Column(String, nullable=True)
     is_guest_uploaded = Column(Boolean, default=False)
+    
+    # Categorization & AI metrics
+    category = Column(String, default="candid") # candid, traditional, couple, guest
+    is_album_selection = Column(Boolean, default=False)
+    sharpness_score = Column(Float, default=100.0)
+    exposure_score = Column(Float, default=120.0)
+    is_duplicate = Column(Boolean, default=False)
+    duplicate_of_id = Column(String, nullable=True)
+    blink_detected = Column(Boolean, default=False)
+    cull_status = Column(String, default="keep") # keep, reject, pending_review
+    image_hash = Column(String, nullable=True)
+    
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     # Relationships

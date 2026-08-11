@@ -138,6 +138,15 @@ class PhotoBase(BaseModel):
     matched_guests: Optional[List[str]] = None
     uploaded_by_guest: Optional[str] = None
     is_guest_uploaded: Optional[bool] = False
+    category: Optional[str] = "candid"
+    is_album_selection: Optional[bool] = False
+    sharpness_score: Optional[float] = 100.0
+    exposure_score: Optional[float] = 120.0
+    is_duplicate: Optional[bool] = False
+    duplicate_of_id: Optional[str] = None
+    blink_detected: Optional[bool] = False
+    cull_status: Optional[str] = "keep"
+    image_hash: Optional[str] = None
 
 class PhotoResponse(PhotoBase):
     id: str

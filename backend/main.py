@@ -566,7 +566,7 @@ def upload_file_to_storage(filename: str, file_bytes: bytes) -> str:
     return f"/uploads/{filename}"
 
 
-def trigger_background_processing(photo_id: str, background_tasks: BackgroundTasks):
+def trigger_background_processing(photo_id: str, background_tasks: BackgroundTasks, cull_blinks: bool = True, color_preset: str = "none", category: str = "candid"):
     """
     Triggers background processing. 
     If a Redis broker is configured, pushes to Celery.
@@ -577,15 +577,15 @@ def trigger_background_processing(photo_id: str, background_tasks: BackgroundTas
     
     if redis_broker:
         try:
-            process_photo_face_matching.delay(photo_id)
-            print(f"[Queue] Pushed photo {photo_id} to Celery worker.")
+            process_photo_face_matching.delay(photo_id, cull_blinks, color_preset, category)
+            print(f"[Queue] Pushed photo {photo_id} with preset {color_preset} to Celery worker.")
             return
         except Exception as e:
             print(f"[Queue Exception] Failed to push to Celery: {e}. Falling back to BackgroundTasks.")
             
     # Fallback to local execution
-    background_tasks.add_task(process_photo_face_matching, photo_id)
-    print(f"[Local Thread] Dispatched photo {photo_id} via FastAPI BackgroundTasks.")
+    background_tasks.add_task(process_photo_face_matching, photo_id, cull_blinks, color_preset, category)
+    print(f"[Local Thread] Dispatched photo {photo_id} with preset {color_preset} via FastAPI BackgroundTasks.")
 
 
 @app.post("/api/photos/upload", response_model=schemas.PhotoResponse)
@@ -593,6 +593,9 @@ async def upload_gallery_photo(
     background_tasks: BackgroundTasks,
     gallery_id: str = Form(...),
     file: UploadFile = File(...),
+    category: str = Form("candid"),
+    color_preset: str = Form("none"),
+    cull_blinks: bool = Form(True),
     current_user: models.User = Depends(auth.get_current_user),
     db: Session = Depends(get_db),
     _ = Depends(upload_limiter)
@@ -633,6 +636,7 @@ async def upload_gallery_photo(
         original_url=storage_url,
         edited_url=storage_url,
         is_selected=False,
+        category=category,
         ai_tags=["Processing..."]
     )
     db.add(db_photo)
@@ -640,7 +644,13 @@ async def upload_gallery_photo(
     db.refresh(db_photo)
 
     # Trigger async background task (Celery or BackgroundTasks fallback)
-    trigger_background_processing(db_photo.id, background_tasks)
+    trigger_background_processing(
+        photo_id=db_photo.id,
+        background_tasks=background_tasks,
+        cull_blinks=cull_blinks,
+        color_preset=color_preset,
+        category=category
+    )
 
     return db_photo
 
@@ -1346,4 +1356,223 @@ def get_public_guest_gallery(guest_id: str, db: Session = Depends(get_db), _ = D
                 "ai_tags": p.ai_tags
             } for p in matched_photos
         ]
+    }
+
+
+# ----------------- CRM Culling & Retouching State Engine -----------------
+
+@app.get("/api/jobs/{booking_id}/status")
+def get_culling_job_status(booking_id: str, db: Session = Depends(get_db)):
+    job = db.query(models.CullingJob).filter(models.CullingJob.booking_id == booking_id).first()
+    if not job:
+        # Implicitly auto-initialize job state if photos are uploaded
+        booking = db.query(models.Booking).filter(models.Booking.id == booking_id).first()
+        if not booking:
+            raise HTTPException(status_code=404, detail="Booking session not found")
+        
+        gallery = db.query(models.Gallery).filter(models.Gallery.booking_id == booking_id).first()
+        photos_count = db.query(models.Photo).filter(models.Photo.gallery_id == gallery.id).count() if gallery else 0
+        
+        return {
+            "booking_id": booking_id,
+            "status": "uploaded" if photos_count > 0 else "pending_upload",
+            "total_photos": photos_count,
+            "rejected_photos": 0,
+            "avg_sharpness": 100.0
+        }
+    return {
+        "booking_id": job.booking_id,
+        "status": job.status,
+        "total_photos": job.total_photos,
+        "rejected_photos": job.rejected_photos,
+        "avg_sharpness": job.avg_sharpness
+    }
+
+
+@app.post("/api/photos/{photo_id}/cull-decision")
+def override_ai_cull_decision(
+    photo_id: str,
+    decision: str = Query(..., description="keep or reject"),
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    photo = db.query(models.Photo).filter(models.Photo.id == photo_id).first()
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+        
+    decision = decision.lower().strip()
+    if decision not in ["keep", "reject"]:
+        raise HTTPException(status_code=400, detail="Invalid decision. Choose keep or reject.")
+
+    photo.cull_status = decision
+    
+    # Update AI tags visually
+    tags = [t for t in (photo.ai_tags or []) if not t.startswith("Cull:")]
+    tags.append(f"Cull: {decision.upper()}")
+    photo.ai_tags = tags
+    db.commit()
+
+    # Recalculate job status counts
+    gallery = db.query(models.Gallery).filter(models.Gallery.id == photo.gallery_id).first()
+    if gallery:
+        job = db.query(models.CullingJob).filter(models.CullingJob.booking_id == gallery.booking_id).first()
+        if job:
+            photos = db.query(models.Photo).filter(models.Photo.gallery_id == gallery.id).all()
+            job.rejected_photos = sum(1 for p in photos if p.cull_status == "reject")
+            db.commit()
+
+    return {"status": "success", "photo_id": photo_id, "cull_status": photo.cull_status}
+
+
+# ----------------- Client Album Builder Submission -----------------
+
+@app.post("/api/public/galleries/{gallery_id}/submit-album")
+def submit_wedding_album(
+    gallery_id: str,
+    db: Session = Depends(get_db),
+    _ = Depends(public_limiter)
+):
+    gallery = db.query(models.Gallery).filter(models.Gallery.id == gallery_id).first()
+    if not gallery:
+        raise HTTPException(status_code=404, detail="Gallery album not found")
+        
+    booking = db.query(models.Booking).filter(models.Booking.id == gallery.booking_id).first()
+    studio = db.query(models.Studio).filter(models.Studio.id == gallery.studio_id).first()
+    client = db.query(models.Client).filter(models.Client.id == booking.client_id).first() if booking else None
+
+    # Fetch album picks
+    selections = db.query(models.Photo).filter(
+        models.Photo.gallery_id == gallery_id,
+        models.Photo.is_album_selection == True
+    ).all()
+
+    gallery.album_submitted = True
+    
+    # Update job state to 'delivered'
+    if booking:
+        job = db.query(models.CullingJob).filter(models.CullingJob.booking_id == booking.id).first()
+        if job:
+            job.status = "delivered"
+            
+    db.commit()
+
+    # Dispatch email notifying photographer
+    owner_email = "owner@aura.com" if gallery.studio_id == "f9354733-a202-4ac8-8181-8cb38fc17de4" else "owner@vogue.com"
+    client_name = client.name if client else "Newlywed Client"
+    
+    subject = f"Wedding Album Submitted: {gallery.title}"
+    body_html = f"""
+    <h3>Album Selections Received!</h3>
+    <p>Your client <strong>{client_name}</strong> has submitted their final wedding print album choices.</p>
+    <p>Total Selected Images: <strong>{len(selections)} photos</strong></p>
+    <p>Please open your studio panel to download the selection manifest.</p>
+    """
+    body_text = f"Hi, client {client_name} submitted their album choices: {len(selections)} photos."
+    send_smtp_email(owner_email, subject, body_html, body_text)
+
+    return {"status": "success", "selected_count": len(selections)}
+
+
+# ----------------- Third-Party AI Culler Webhook Receiver -----------------
+
+@app.post("/api/public/webhooks/ai-culler")
+def receive_ai_culler_callback(payload: dict, db: Session = Depends(get_db)):
+    """
+    Receives webhook requests from external culling platforms (Aftershoot, Imagen AI).
+    Body template: { "photo_id": "uuid", "sharpness": 124.0, "exposure": 110.0, "blink": false, "duplicate": false }
+    """
+    photo_id = payload.get("photo_id")
+    photo = db.query(models.Photo).filter(models.Photo.id == photo_id).first()
+    if not photo:
+        raise HTTPException(status_code=404, detail="Webhook Error: Photo not found")
+
+    photo.sharpness_score = float(payload.get("sharpness", 100.0))
+    photo.exposure_score = float(payload.get("exposure", 120.0))
+    photo.blink_detected = bool(payload.get("blink", False))
+    photo.is_duplicate = bool(payload.get("duplicate", False))
+
+    if photo.sharpness_score < 90.0 or photo.blink_detected or photo.is_duplicate:
+        photo.cull_status = "reject"
+    else:
+        photo.cull_status = "keep"
+
+    db.commit()
+    print(f"[Webhook Callback] Logged external AI scores for photo: {photo_id}")
+    return {"status": "callback_logged"}
+
+
+# ----------------- Auto-Billing & Delivery Link Module -----------------
+
+@app.post("/api/bookings/{booking_id}/invoice-add-ons")
+def invoice_extra_album_selections(
+    booking_id: str,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    booking = db.query(models.Booking).filter(
+        models.Booking.id == booking_id,
+        models.Booking.studio_id == current_user.studio_id
+    ).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    gallery = db.query(models.Gallery).filter(models.Gallery.booking_id == booking_id).first()
+    if not gallery:
+        raise HTTPException(status_code=404, detail="No delivery gallery exists for booking")
+
+    # Get total selections
+    selections_count = db.query(models.Photo).filter(
+        models.Photo.gallery_id == gallery.id,
+        models.Photo.is_album_selection == True
+    ).count()
+
+    allowed_quota = gallery.quota_couple + gallery.quota_traditional + gallery.quota_candid
+    extra_photos = selections_count - allowed_quota
+
+    if extra_photos <= 0:
+        return {"status": "quota_within_limits", "selected": selections_count, "quota": allowed_quota}
+
+    # Invoice client $15.0 per extra photo select
+    unit_price = 15.0
+    total_invoice = extra_photos * unit_price
+
+    # Generate invoice DDL
+    due_date = datetime.datetime.utcnow() + datetime.timedelta(days=7)
+    db_invoice = models.Invoice(
+        studio_id=current_user.studio_id,
+        booking_id=booking_id,
+        client_id=booking.client_id,
+        amount=total_invoice,
+        tax=0.0,
+        status="Pending",
+        due_at=due_date
+    )
+    db.add(db_invoice)
+    
+    # Update job state to 'invoiced'
+    job = db.query(models.CullingJob).filter(models.CullingJob.booking_id == booking_id).first()
+    if job:
+        job.status = "invoiced"
+
+    db.commit()
+    db.refresh(db_invoice)
+
+    client = db.query(models.Client).filter(models.Client.id == booking.client_id).first()
+    if client:
+        subject = f"Invoice Issued: Extra Album Selections - {gallery.title}"
+        body_html = f"""
+        <h3>Album Extras Billing</h3>
+        <p>Hi {client.name},</p>
+        <p>Your wedding album has been locked. You selected <strong>{selections_count} photos</strong> which exceeds your packaging quota of <strong>{allowed_quota} photos</strong> by <strong>{extra_photos} extra selections</strong>.</p>
+        <p>An invoice of <strong>${total_invoice:.2f}</strong> has been generated in your client portal.</p>
+        <p>Please log into your portal to process payment.</p>
+        """
+        body_text = f"Hi {client.name}, invoice generated for {extra_photos} extra album photos: ${total_invoice:.2f}."
+        send_smtp_email(client.email, subject, body_html, body_text)
+
+    return {
+        "status": "invoice_created",
+        "invoice_id": db_invoice.id,
+        "extra_photos": extra_photos,
+        "amount": total_invoice
     }

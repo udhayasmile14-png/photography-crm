@@ -19,7 +19,7 @@ def seed_db():
     # Drop all existing tables using CASCADE to prevent dependency failures
     try:
         with engine.connect() as conn:
-            for table_name in ["message_logs", "contracts", "photos_faces", "photos", "galleries", "invoices", "wedding_guests", "bookings", "clients", "users", "studios"]:
+            for table_name in ["message_logs", "contracts", "culling_jobs", "photos_faces", "photos", "galleries", "invoices", "wedding_guests", "bookings", "clients", "users", "studios"]:
                 conn.execute(text(f"DROP TABLE IF EXISTS {table_name} CASCADE;"))
             conn.commit()
             print("Successfully dropped existing tables with CASCADE.")

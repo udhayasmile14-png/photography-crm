@@ -83,28 +83,22 @@ def align_face(image_path: str) -> list:
     """
     Detects faces, finds eye coordinates, performs affine rotation to align the eyes, 
     crops the aligned face, and saves it to uploads/aligned_faces/.
-    Returns a list of relative saved file paths.
+    Returns a list of relative saved file paths and eye details.
     """
-    # 1. Load classifiers
     face_cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
     eye_cascade_path = cv2.data.haarcascades + 'haarcascade_eye.xml'
     
     face_cascade = cv2.CascadeClassifier(face_cascade_path)
     eye_cascade = cv2.CascadeClassifier(eye_cascade_path)
 
-    # 2. Read image
     img = cv2.imread(image_path)
     if img is None:
-        print(f"Error: OpenCV could not read image at {image_path}")
         return []
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
-    # 3. Detect faces
     faces = face_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(60, 60))
-    saved_paths = []
+    results = []
 
-    # Ensure output directory exists
     output_dir = os.path.join(os.path.dirname(os.path.abspath(image_path)), "aligned_faces")
     os.makedirs(output_dir, exist_ok=True)
 
@@ -112,11 +106,8 @@ def align_face(image_path: str) -> list:
         roi_gray = gray[y:y+h, x:x+w]
         roi_color = img[y:y+h, x:x+w]
 
-        # Detect eyes inside face region
         eyes = eye_cascade.detectMultiScale(roi_gray, scaleFactor=1.15, minNeighbors=3, minSize=(15, 15))
-        
         desired_size = 112
-        aligned_face = None
 
         if len(eyes) >= 2:
             eyes = sorted(eyes, key=lambda e: e[0])
@@ -125,12 +116,10 @@ def align_face(image_path: str) -> list:
             left_eye_center = (x + left_eye[0] + left_eye[2] // 2, y + left_eye[1] + left_eye[3] // 2)
             right_eye_center = (x + right_eye[0] + right_eye[2] // 2, y + right_eye[1] + right_eye[3] // 2)
 
-            # Compute angle
             dy = right_eye_center[1] - left_eye_center[1]
             dx = right_eye_center[0] - left_eye_center[0]
             angle = math.degrees(math.atan2(dy, dx))
 
-            # Compute scale factor
             eye_dist = math.sqrt(dx*dx + dy*dy)
             desired_eye_dist = desired_size * 0.35
             scale = desired_eye_dist / max(1.0, eye_dist)
@@ -150,9 +139,13 @@ def align_face(image_path: str) -> list:
         filename = f"aligned-{uuid.uuid4()}-{idx}.jpg"
         save_path = os.path.join(output_dir, filename)
         cv2.imwrite(save_path, aligned_face)
-        saved_paths.append(f"/uploads/aligned_faces/{filename}")
+        
+        results.append({
+            "path": f"/uploads/aligned_faces/{filename}",
+            "eyes_count": len(eyes)
+        })
 
-    return saved_paths
+    return results
 
 
 def extract_face_embedding(image_path: str) -> list:
@@ -193,6 +186,107 @@ def calculate_cosine_similarity(vec1: list, vec2: list) -> float:
 
 
 # ==========================================
+# 🔍 Culling & Retouching Metrics
+# ==========================================
+def calculate_sharpness(image_path: str) -> float:
+    """
+    Measures the focus/sharpness using Laplacian variance (Laplacian score).
+    """
+    try:
+        img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            return 100.0
+        return float(cv2.Laplacian(img, cv2.CV_64F).var())
+    except Exception:
+        return 100.0
+
+
+def analyze_exposure(image_path: str) -> float:
+    """
+    Calculates average image pixel brightness (0 - 255).
+    """
+    try:
+        img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            return 120.0
+        return float(img.mean())
+    except Exception:
+        return 120.0
+
+
+def calculate_image_hash(image_path: str) -> str:
+    """
+    Calculates a 64-bit Average Hash (aHash) hex string to detect duplicates.
+    """
+    try:
+        img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            return ""
+        # Resize to 8x8 to ignore details and check composition
+        resized = cv2.resize(img, (8, 8), interpolation=cv2.INTER_AREA)
+        avg = resized.mean()
+        diff = resized > avg
+        
+        hash_val = 0
+        for idx, bit in enumerate(diff.flatten()):
+            if bit:
+                hash_val |= (1 << idx)
+        return f"{hash_val:016x}"
+    except Exception:
+        return ""
+
+
+def apply_color_preset(image_path: str, preset_name: str) -> str:
+    """
+    Applies custom filters and color grades using OpenCV.
+    """
+    try:
+        img = cv2.imread(image_path)
+        if img is None:
+            return ""
+            
+        preset = preset_name.lower().strip()
+        
+        if preset == "vibrant":
+            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+            h, s, v = cv2.split(hsv)
+            s = np.clip(s * 1.30, 0, 255).astype(np.uint8)
+            v = np.clip(v * 1.08, 0, 255).astype(np.uint8)
+            hsv = cv2.merge([h, s, v])
+            out_img = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+            
+        elif preset == "warm":
+            b, g, r = cv2.split(img)
+            r = np.clip(r + 20, 0, 255).astype(np.uint8)
+            b = np.clip(b - 12, 0, 255).astype(np.uint8)
+            out_img = cv2.merge([b, g, r])
+            
+        elif preset == "moody":
+            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+            h, s, v = cv2.split(hsv)
+            s = np.clip(s * 0.82, 0, 255).astype(np.uint8) # Desaturate
+            hsv = cv2.merge([h, s, v])
+            temp_img = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+            # Add matte black lift
+            out_img = cv2.convertScaleAbs(temp_img, alpha=0.84, beta=18)
+            
+        elif preset in ["bw", "classic"]:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            out_img = cv2.merge([gray, gray, gray])
+        else:
+            return ""
+            
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        filename = f"retouched-{uuid.uuid4()}.jpg"
+        save_path = os.path.join(base_dir, "..", "uploads", filename)
+        cv2.imwrite(save_path, out_img)
+        return f"/uploads/{filename}"
+    except Exception as e:
+        print(f"Error applying color preset: {e}")
+        return ""
+
+
+# ==========================================
 # 📝 System Logging Helper
 # ==========================================
 def log_message(db, studio_id: str, client_id: str | None, subject: str, body: str, channel: str = "Email"):
@@ -212,10 +306,10 @@ def log_message(db, studio_id: str, client_id: str | None, subject: str, body: s
 # ⚙️ Asynchronous Celery Task
 # ==========================================
 @celery_app.task(name="tasks.process_photo_face_matching")
-def process_photo_face_matching(photo_id: str):
+def process_photo_face_matching(photo_id: str, cull_blinks: bool = True, color_preset: str = "none", category: str = "candid"):
     """
-    Celery task that executes OpenCV Face Detection, alignment, CNN feature extraction,
-    pgvector matching, and dispatches automated SMTP emails and WhatsApp logs.
+    Celery task that executes focus/sharpness calculations, aHash duplicate detection, 
+    blink culling, SFace alignment, pgvector matching, preset grading, and state updates.
     """
     db = SessionLocal()
     try:
@@ -228,7 +322,46 @@ def process_photo_face_matching(photo_id: str):
         if not gallery:
             return
 
-        # Query targets
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        photo_filename = os.path.basename(photo.original_url)
+        photo_path = os.path.join(base_dir, "..", "uploads", photo_filename)
+
+        if not os.path.exists(photo_path):
+            print(f"Error: Photo file not found at path {photo_path}")
+            return
+
+        # 1. Run Quality Analytics (Sharpness & Exposure)
+        sharpness = calculate_sharpness(photo_path)
+        exposure = analyze_exposure(photo_path)
+        photo_hash = calculate_image_hash(photo_path)
+
+        photo.sharpness_score = sharpness
+        photo.exposure_score = exposure
+        photo.image_hash = photo_hash
+
+        # 2. Check for Duplicates in the gallery (Hamming distance < 4)
+        is_duplicate = False
+        duplicate_of_id = None
+        if photo_hash:
+            siblings = db.query(models.Photo).filter(
+                models.Photo.gallery_id == photo.gallery_id,
+                models.Photo.id != photo_id,
+                models.Photo.image_hash != None
+            ).all()
+            for sib in siblings:
+                dist = sum(c1 != c2 for c1, c2 in zip(photo_hash, sib.image_hash))
+                if dist < 4:
+                    is_duplicate = True
+                    duplicate_of_id = sib.id
+                    break
+
+        photo.is_duplicate = is_duplicate
+        photo.duplicate_of_id = duplicate_of_id
+
+        # 3. Detect and Align Faces + Blink Check
+        aligned_results = align_face(photo_path)
+        blink_detected = False
+        
         clients = db.query(models.Client).filter(
             models.Client.studio_id == gallery.studio_id,
             models.Client.face_recognition_consent == True,
@@ -246,96 +379,101 @@ def process_photo_face_matching(photo_id: str):
         for g in guests:
             all_targets.append(("guest", g.id, g.name, g.email, g.face_embedding))
 
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        photo_filename = os.path.basename(photo.original_url)
-        photo_path = os.path.join(base_dir, "..", "uploads", photo_filename)
-
         matched_client_ids = []
         matched_client_names = []
         matched_guest_ids = []
         matched_guest_names = []
 
-        if os.path.exists(photo_path):
-            aligned_crops = align_face(photo_path)
+        for res in aligned_results:
+            crop_rel_path = res["path"]
+            eyes_count = res["eyes_count"]
             
-            for crop_rel_path in aligned_crops:
-                crop_filename = os.path.basename(crop_rel_path)
-                crop_absolute_path = os.path.join(base_dir, "..", "uploads", "aligned_faces", crop_filename)
-                
-                face_embedding = extract_face_embedding(crop_absolute_path)
-                if face_embedding:
-                    # Save embedding to PostgreSQL photos_faces table
-                    db_face = models.PhotoFace(
-                        photo_id=photo_id,
-                        face_embedding=face_embedding
-                    )
-                    db.add(db_face)
-                    db.commit()
+            # Blink heuristic: If face detected but less than 2 eyes found
+            if eyes_count < 2 and cull_blinks:
+                blink_detected = True
 
-                    for t_type, t_id, t_name, t_email, t_embedding in all_targets:
-                        sim = calculate_cosine_similarity(face_embedding, t_embedding)
-                        print(f"Task CNN Match: Photo {photo_id} against {t_name}. Cosine Similarity: {sim:.4f}")
-                        
-                        if sim > 0.365:
-                            if t_type == "client":
-                                if t_id not in matched_client_ids:
-                                    matched_client_ids.append(t_id)
-                                    matched_client_names.append(t_name)
-                            else:
-                                if t_id not in matched_guest_ids:
-                                    matched_guest_ids.append(t_id)
-                                    matched_guest_names.append(t_name)
+            crop_filename = os.path.basename(crop_rel_path)
+            crop_absolute_path = os.path.join(base_dir, "..", "uploads", "aligned_faces", crop_filename)
+            
+            face_embedding = extract_face_embedding(crop_absolute_path)
+            if face_embedding:
+                db_face = models.PhotoFace(
+                    photo_id=photo_id,
+                    face_embedding=face_embedding
+                )
+                db.add(db_face)
+                db.commit()
 
-                                    # 1. Dispatch real automated SMTP email
-                                    subject = f"We found your photos from the wedding!"
-                                    gallery_url = f"http://localhost:5173/public/guest/{t_id}/gallery"
-                                    
-                                    body_html = f"""
-                                    <html>
-                                      <body style="font-family: Arial, sans-serif; background-color: #f3f4f6; padding: 20px;">
-                                        <div style="background-color: #ffffff; padding: 30px; border-radius: 8px; max-width: 600px; margin: 0 auto; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
-                                          <h2 style="color: #4f46e5;">Hi {t_name}!</h2>
-                                          <p style="font-size: 16px; color: #374151;">The wedding photographer has uploaded new snapshots, and we matched your face in one of them!</p>
-                                          <p style="font-size: 16px; color: #374151;">Click the button below to view your personalized wedding photo gallery page:</p>
-                                          <div style="text-align: center; margin: 30px 0;">
-                                            <a href="{gallery_url}" style="background-color: #4f46e5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">View My Photos</a>
-                                          </div>
-                                          <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 20px 0;" />
-                                          <p style="font-size: 12px; color: #9ca3af;">This email was sent automatically by Aperture CRM. Your biometric data is processed securely and is private to this event.</p>
-                                        </div>
-                                      </body>
-                                    </html>
-                                    """
-                                    body_text = f"Hi {t_name},\n\nWe found you in the wedding photos! Click here to view your personal gallery: {gallery_url}"
-                                    
-                                    send_smtp_email(
-                                        to_email=t_email,
-                                        subject=subject,
-                                        body_html=body_html,
-                                        body_text=body_text
-                                    )
+                for t_type, t_id, t_name, t_email, t_embedding in all_targets:
+                    sim = calculate_cosine_similarity(face_embedding, t_embedding)
+                    if sim > 0.365:
+                        if t_type == "client":
+                            if t_id not in matched_client_ids:
+                                matched_client_ids.append(t_id)
+                                matched_client_names.append(t_name)
+                        else:
+                            if t_id not in matched_guest_ids:
+                                matched_guest_ids.append(t_id)
+                                matched_guest_names.append(t_name)
+                                
+                                # Send match notification emails to guests
+                                gallery_url = f"http://localhost:5173/public/guest/{t_id}/gallery"
+                                body_html = f"<h3>Hi {t_name}!</h3><p>We found you in the wedding photos! <a href='{gallery_url}'>Click here to view your gallery</a>.</p>"
+                                body_text = f"Hi {t_name}, we found you in the photos! Link: {gallery_url}"
+                                
+                                send_smtp_email(t_email, "We found your photos from the wedding!", body_html, body_text)
+                                log_message(db, gallery.studio_id, None, "WhatsApp Auto-Notification", f"WhatsApp alert containing gallery link sent to {t_name}: {gallery_url}", "WhatsApp")
+                                log_message(db, gallery.studio_id, None, "We found your photos!", f"Sent automated match email to guest {t_name} ({t_email})", "Email")
 
-                                    # 2. Log simulated WhatsApp message sent to the guest
-                                    log_message(
-                                        db,
-                                        studio_id=gallery.studio_id,
-                                        client_id=None,
-                                        subject="WhatsApp Auto-Notification",
-                                        body=f"Sent WhatsApp alert to guest '{t_name}' (WhatsApp: {t_name}'s registered number) containing their match link: {gallery_url}",
-                                        channel="WhatsApp"
-                                    )
-                                    # 3. Log email delivery success into Message Logs table
-                                    log_message(
-                                        db,
-                                        studio_id=gallery.studio_id,
-                                        client_id=None,
-                                        subject=subject,
-                                        body=f"Sent automated match email to guest {t_name} ({t_email}) with gallery link.",
-                                        channel="Email"
-                                    )
+        photo.blink_detected = blink_detected
 
-        # Update photo tags and targets
-        base_tags = ["Sharp", "Outdoor", "Candid", "High Composition"]
+        # 4. Auto-Categorize Photo (Groom + Bride = Couple Portrait)
+        # Fetch client ids linked to this gallery booking
+        booking = db.query(models.Booking).filter(models.Booking.id == gallery.booking_id).first()
+        is_primary_client_match = False
+        if booking and booking.client_id in matched_client_ids:
+            is_primary_client_match = True
+
+        if photo.is_guest_uploaded:
+            photo.category = "guest"
+        elif is_primary_client_match and len(matched_client_ids) >= 1:
+            photo.category = "couple"
+        else:
+            photo.category = category
+
+        # 5. Apply AI Culling Decision Heuristics
+        # Auto-Reject if blurry, duplicate, or blink detected. Else Keep.
+        if sharpness < 90.0 or exposure < 30.0 or exposure > 235.0 or blink_detected or is_duplicate:
+            photo.cull_status = "reject"
+        else:
+            photo.cull_status = "keep"
+
+        # 6. Apply Retouching Preset
+        if color_preset != "none":
+            retouched_url = apply_color_preset(photo_path, color_preset)
+            if retouched_url:
+                photo.edited_url = retouched_url
+            else:
+                photo.edited_url = photo.original_url
+        else:
+            photo.edited_url = photo.original_url
+
+        # Build final display tags
+        base_tags = []
+        if photo.category == "couple":
+            base_tags.append("Couple Portrait")
+        elif photo.category == "traditional":
+            base_tags.append("Traditional Posed")
+        else:
+            base_tags.append("Candid Snapshot")
+
+        if sharpness < 90.0:
+            base_tags.append("⚠️ Blurry")
+        if blink_detected:
+            base_tags.append("⚠️ Closed Eyes")
+        if is_duplicate:
+            base_tags.append("⚠️ Duplicate")
+
         for name in matched_client_names:
             base_tags.append(f"Found: {name}")
         for name in matched_guest_names:
@@ -345,9 +483,31 @@ def process_photo_face_matching(photo_id: str):
         photo.matched_clients = matched_client_ids
         photo.matched_guests = matched_guest_ids
         db.commit()
-        print(f"Celery task face processing complete for photo: {photo_id}")
+
+        # 7. Update CRM CullingJob State Machine
+        culling_job = db.query(models.CullingJob).filter(models.CullingJob.booking_id == gallery.booking_id).first()
+        if not culling_job:
+            culling_job = models.CullingJob(
+                booking_id=gallery.booking_id,
+                status="culling"
+            )
+            db.add(culling_job)
+            db.commit()
+
+        # Calculate counts
+        gallery_photos = db.query(models.Photo).filter(models.Photo.gallery_id == gallery.id).all()
+        rejected_count = sum(1 for p in gallery_photos if p.cull_status == "reject")
+        avg_sharp = sum(p.sharpness_score for p in gallery_photos) / len(gallery_photos) if gallery_photos else 100.0
+
+        culling_job.total_photos = len(gallery_photos)
+        culling_job.rejected_photos = rejected_count
+        culling_job.avg_sharpness = avg_sharp
+        culling_job.status = "review" # Move state to review once culling is completed
+        db.commit()
+
+        print(f"Celery AI processing completely succeeded for photo: {photo_id}")
         
     except Exception as e:
-        print(f"Error in Celery background task: {e}")
+        print(f"Error in Celery task: {e}")
     finally:
         db.close()
