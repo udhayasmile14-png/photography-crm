@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { 
   Plus, 
@@ -162,7 +163,7 @@ const Bookings: React.FC = () => {
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', maxWidth: '400px', marginBottom: '1.25rem' }}>
             You need to create a client record first before you can schedule a photoshoot session.
           </p>
-          <a href="/dashboard/clients" className="btn btn-primary" style={{ fontSize: '0.85rem' }}>Register a Client</a>
+          <Link to="/dashboard/clients" className="btn btn-primary" style={{ fontSize: '0.85rem' }}>Register a Client</Link>
         </div>
       )}
 
