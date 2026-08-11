@@ -1478,6 +1478,22 @@ def override_ai_cull_decision(
     return {"status": "success", "photo_id": photo_id, "cull_status": photo.cull_status}
 
 
+@app.post("/api/photos/{photo_id}/hero")
+def toggle_photo_hero_status(
+    photo_id: str,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    photo = db.query(models.Photo).filter(models.Photo.id == photo_id).first()
+    if not photo:
+        raise HTTPException(status_code=404, detail="Photo not found")
+        
+    photo.is_hero = not photo.is_hero
+    db.commit()
+    db.refresh(photo)
+    return {"status": "success", "photo_id": photo_id, "is_hero": photo.is_hero}
+
+
 # ----------------- Client Album Builder Submission -----------------
 
 @app.post("/api/public/galleries/{gallery_id}/submit-album")

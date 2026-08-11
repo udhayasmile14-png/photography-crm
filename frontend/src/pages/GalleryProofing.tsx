@@ -23,6 +23,7 @@ interface Photo {
   ai_tags: string[] | null;
   matched_clients: string[] | null;
   category: string;
+  is_hero?: boolean;
 }
 
 interface GalleryData {
@@ -51,6 +52,7 @@ const GalleryProofing: React.FC = () => {
   const [gallery, setGallery] = useState<GalleryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [activePhoto, setActivePhoto] = useState<Photo | null>(null);
+  const [activeSlide, setActiveSlide] = useState<number>(0);
   
   // Dynamic Folder Filters
   const [activeCategory, setActiveCategory] = useState<string>('all'); // 'all', 'couple', 'traditional', 'candid', 'guest'
@@ -79,6 +81,16 @@ const GalleryProofing: React.FC = () => {
       setLoading(false);
     }
   }, [galleryId, token]);
+
+  const heroPhotos = gallery?.photos.filter(p => p.is_hero) || [];
+
+  useEffect(() => {
+    if (heroPhotos.length <= 1) return;
+    const interval = setInterval(() => {
+      setActiveSlide(prev => (prev + 1) % heroPhotos.length);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [heroPhotos.length]);
 
   const toggleFavorite = async (photoId: string) => {
     if (gallery?.album_submitted) return; // Locked if submitted
@@ -233,6 +245,135 @@ const GalleryProofing: React.FC = () => {
 
       <main style={{ maxWidth: '1400px', margin: '0 auto', padding: '2rem' }}>
         
+        {/* Curated Highlight Slideshow */}
+        {heroPhotos.length > 0 && (
+          <div style={{
+            position: 'relative',
+            height: '320px',
+            borderRadius: 'var(--radius-md)',
+            overflow: 'hidden',
+            border: '1px solid var(--border-color)',
+            marginBottom: '2rem',
+            boxShadow: '0 12px 36px rgba(124, 58, 237, 0.15)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}>
+            <div style={{
+              position: 'absolute',
+              top: 0, left: 0, right: 0, bottom: 0,
+              backgroundImage: `url(${heroPhotos[activeSlide].edited_url || heroPhotos[activeSlide].original_url})`,
+              backgroundSize: 'cover',
+              backgroundPosition: 'center',
+              filter: 'blur(35px) brightness(0.25)',
+              transform: 'scale(1.1)',
+              zIndex: 1
+            }} />
+
+            <div style={{
+              position: 'relative',
+              zIndex: 2,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              width: '100%',
+              height: '100%',
+              padding: '1.5rem 3rem',
+              gap: '2rem'
+            }}>
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.5rem', textAlign: 'left' }}>
+                <span style={{
+                  alignSelf: 'flex-start',
+                  background: 'linear-gradient(90deg, #fbbf24, #d97706)',
+                  color: '#000',
+                  fontSize: '0.6rem',
+                  fontWeight: 800,
+                  padding: '0.2rem 0.6rem',
+                  borderRadius: '20px',
+                  letterSpacing: '1px',
+                  textTransform: 'uppercase',
+                  boxShadow: '0 0 15px rgba(251, 191, 36, 0.4)'
+                }}>
+                  🌟 Curated Highlights
+                </span>
+                <h2 style={{ fontSize: '1.5rem', fontWeight: 800, textShadow: '0 2px 10px rgba(0,0,0,0.5)', margin: 0 }}>
+                  Studio Selection Showcase
+                </h2>
+                <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.8rem', maxWidth: '380px', lineHeight: '1.4', margin: 0 }}>
+                  Our photography studio selected this hero shot for manual high-end editorial correction. You can select it for your printed album.
+                </p>
+                
+                <button
+                  onClick={() => toggleFavorite(heroPhotos[activeSlide].id)}
+                  className="btn"
+                  style={{
+                    alignSelf: 'flex-start',
+                    marginTop: '0.5rem',
+                    background: heroPhotos[activeSlide].is_selected ? 'var(--accent-purple)' : 'rgba(255,255,255,0.1)',
+                    border: '1px solid var(--border-color)',
+                    padding: '0.4rem 0.8rem',
+                    color: '#fff',
+                    fontSize: '0.75rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.3rem',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <Heart size={12} fill={heroPhotos[activeSlide].is_selected ? "#fff" : "none"} />
+                  <span>{heroPhotos[activeSlide].is_selected ? "Favorited in Album" : "Add to Printed Album"}</span>
+                </button>
+              </div>
+
+              <div style={{
+                height: '100%',
+                width: '320px',
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid rgba(255,255,255,0.15)',
+                boxShadow: '0 8px 30px rgba(0,0,0,0.5)',
+                overflow: 'hidden',
+                background: '#000',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}>
+                <img
+                  src={heroPhotos[activeSlide].edited_url || heroPhotos[activeSlide].original_url}
+                  alt="Highlight Selection"
+                  style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }}
+                />
+              </div>
+            </div>
+
+            {heroPhotos.length > 1 && (
+              <div style={{
+                position: 'absolute',
+                bottom: '1rem',
+                left: '3rem',
+                zIndex: 10,
+                display: 'flex',
+                gap: '0.4rem'
+              }}>
+                {heroPhotos.map((_, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => setActiveSlide(idx)}
+                    style={{
+                      width: '6px',
+                      height: '6px',
+                      borderRadius: '50%',
+                      background: idx === activeSlide ? 'var(--accent-purple)' : 'rgba(255,255,255,0.3)',
+                      border: 'none',
+                      padding: 0,
+                      cursor: 'pointer'
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Album Submission Success alert */}
         {submitSuccess && (
           <div style={{

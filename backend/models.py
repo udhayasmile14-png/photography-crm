@@ -185,6 +185,7 @@ class Photo(Base):
     original_url = Column(String, nullable=False)
     edited_url = Column(String, nullable=True)
     is_selected = Column(Boolean, default=False)
+    is_hero = Column(Boolean, default=False)
     ai_tags = Column(JSON, nullable=True)
     matched_clients = Column(JSON, nullable=True)
     matched_guests = Column(JSON, nullable=True)

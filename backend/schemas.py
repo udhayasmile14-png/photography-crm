@@ -133,6 +133,7 @@ class PhotoBase(BaseModel):
     original_url: str
     edited_url: Optional[str] = None
     is_selected: Optional[bool] = False
+    is_hero: Optional[bool] = False
     ai_tags: Optional[List[str]] = None
     matched_clients: Optional[List[str]] = None
     matched_guests: Optional[List[str]] = None

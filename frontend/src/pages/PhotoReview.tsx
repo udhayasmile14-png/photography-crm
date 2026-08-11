@@ -12,7 +12,8 @@ import {
   Send,
   ThumbsUp,
   ThumbsDown,
-  Layers
+  Layers,
+  Star
 } from 'lucide-react';
 
 interface Photo {
@@ -26,6 +27,7 @@ interface Photo {
   blink_detected: boolean;
   cull_status: string;
   ai_tags: string[] | null;
+  is_hero: boolean;
 }
 
 interface JobStatus {
@@ -120,6 +122,25 @@ const PhotoReview: React.FC = () => {
             rejected_photos: rejectedCount
           });
         }
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const toggleHeroStatus = async (photoId: string) => {
+    try {
+      const response = await fetch(`/api/photos/${photoId}/hero`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        const updatedPhotos = photos.map(p => 
+          p.id === photoId ? { ...p, is_hero: data.is_hero } : p
+        );
+        setPhotos(updatedPhotos);
       }
     } catch (err) {
       console.error(err);
@@ -248,13 +269,40 @@ const PhotoReview: React.FC = () => {
                 alignItems: 'center',
                 justifyContent: 'center',
                 overflow: 'hidden',
-                marginBottom: '1rem'
+                marginBottom: '1rem',
+                position: 'relative'
               }}>
                 <img
                   src={activePhoto.original_url}
                   alt="Review Target"
                   style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }}
                 />
+                
+                {/* Hero Shot Star Toggle */}
+                <button
+                  onClick={() => toggleHeroStatus(activePhoto.id)}
+                  style={{
+                    position: 'absolute',
+                    top: '1rem',
+                    right: '1rem',
+                    background: activePhoto.is_hero ? 'var(--accent-yellow)' : 'rgba(15, 23, 42, 0.75)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '50%',
+                    width: '40px',
+                    height: '40px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: activePhoto.is_hero ? '#000' : '#fff',
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                    transition: 'all 0.2s ease',
+                    zIndex: 10
+                  }}
+                  title={activePhoto.is_hero ? "Remove from Hero Highlights" : "Add to Hero Highlights"}
+                >
+                  <Star size={20} fill={activePhoto.is_hero ? "#000" : "none"} />
+                </button>
               </div>
 
               {/* Keyboard keys hints */}
