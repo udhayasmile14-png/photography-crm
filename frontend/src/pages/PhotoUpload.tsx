@@ -7,7 +7,9 @@ import {
   AlertCircle,
   Loader2,
   FileImage,
-  Sparkles
+  Sparkles,
+  Plus,
+  FolderOpen
 } from 'lucide-react';
 
 interface Gallery {
@@ -29,10 +31,21 @@ interface Photo {
   created_at: string;
 }
 
+interface Booking {
+  id: string;
+  client_id: string;
+  session_type: string;
+  scheduled_at: string;
+  client?: {
+    name: string;
+  };
+}
+
 const PhotoUpload: React.FC = () => {
   const { token } = useAuth();
   
   const [galleries, setGalleries] = useState<Gallery[]>([]);
+  const [bookings, setBookings] = useState<Booking[]>([]);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [selectedGalleryId, setSelectedGalleryId] = useState('');
   const [loading, setLoading] = useState(true);
@@ -47,6 +60,12 @@ const PhotoUpload: React.FC = () => {
   const [category, setCategory] = useState('candid');
   const [colorPreset, setColorPreset] = useState('none');
   const [cullBlinks, setCullBlinks] = useState(true);
+
+  // Gallery Creation States
+  const [showCreatePanel, setShowCreatePanel] = useState(false);
+  const [newGalleryTitle, setNewGalleryTitle] = useState('');
+  const [newGalleryBookingId, setNewGalleryBookingId] = useState('');
+  const [createProgress, setCreateProgress] = useState(false);
 
   // Active preview toggle (Original vs Retouched)
   const [previewEdited, setPreviewEdited] = useState<Record<string, boolean>>({});
@@ -66,14 +85,35 @@ const PhotoUpload: React.FC = () => {
       }
     } catch (err) {
       console.error(err);
-    } finally {
-      setLoading(false);
     }
+  };
+
+  const fetchBookings = async () => {
+    try {
+      const response = await fetch('/api/bookings', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setBookings(data);
+        if (data.length > 0) {
+          setNewGalleryBookingId(data[0].id);
+        }
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const initData = async () => {
+    setLoading(true);
+    await Promise.all([fetchGalleries(), fetchBookings()]);
+    setLoading(false);
   };
 
   useEffect(() => {
     if (token) {
-      fetchGalleries();
+      initData();
     }
   }, [token]);
 
@@ -91,6 +131,45 @@ const PhotoUpload: React.FC = () => {
       setSelectedFile(e.target.files[0]);
       setSuccessMsg(null);
       setErrorMsg(null);
+    }
+  };
+
+  const handleCreateGallerySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newGalleryTitle || !newGalleryBookingId) return;
+
+    setCreateProgress(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    try {
+      const response = await fetch('/api/galleries', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          booking_id: newGalleryBookingId,
+          title: newGalleryTitle,
+          status: 'Active'
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to create gallery. Ensure the booking has no active gallery.');
+      }
+
+      setSuccessMsg(`Gallery "${newGalleryTitle}" created successfully! You can now select it to upload images.`);
+      setNewGalleryTitle('');
+      setShowCreatePanel(false);
+      
+      // Reload lists
+      await fetchGalleries();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Error creating gallery.');
+    } finally {
+      setCreateProgress(false);
     }
   };
 
@@ -157,6 +236,17 @@ const PhotoUpload: React.FC = () => {
 
   const selectedGallery = galleries.find(g => g.id === selectedGalleryId);
 
+  // Filter bookings that do not have active galleries yet
+  const availableBookings = bookings.filter(b => !galleries.some(g => g.booking_id === b.id));
+
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', height: '80vh', alignItems: 'center', justifyContent: 'center' }}>
+        <Loader2 className="animate-spin" size={32} color="var(--accent-purple)" />
+      </div>
+    );
+  }
+
   return (
     <div>
       {/* Header */}
@@ -165,9 +255,107 @@ const PhotoUpload: React.FC = () => {
           <h1 className="page-title">Gallery Media Ingestion</h1>
           <p className="page-subtitle">Upload RAW/JPEG shoots, auto-sort by folder category, and trigger culling & retouch jobs.</p>
         </div>
+        <button
+          onClick={() => setShowCreatePanel(!showCreatePanel)}
+          className="btn btn-secondary"
+          style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}
+        >
+          <Plus size={16} />
+          <span>Create New Gallery</span>
+        </button>
       </div>
 
-      {galleries.length === 0 && !loading && (
+      {/* Gallery Creation Form panel */}
+      {showCreatePanel && (
+        <div className="glass-panel" style={{ padding: '1.75rem', marginBottom: '1.5rem', border: '1px solid var(--accent-purple)' }}>
+          <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <FolderOpen size={18} color="var(--accent-purple)" />
+            <span>Create New Client Delivery Gallery</span>
+          </h3>
+
+          <form onSubmit={handleCreateGallerySubmit} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 150px', gap: '1rem', alignItems: 'end' }}>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">Link to Client Booking *</label>
+              {availableBookings.length > 0 ? (
+                <select
+                  className="form-input"
+                  style={{ background: 'var(--bg-input)' }}
+                  value={newGalleryBookingId}
+                  onChange={(e) => setNewGalleryBookingId(e.target.value)}
+                  required
+                >
+                  {availableBookings.map(b => (
+                    <option key={b.id} value={b.id}>
+                      {b.client?.name || 'Unassigned'} — {b.session_type} ({new Date(b.scheduled_at).toLocaleDateString()})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <select className="form-input" style={{ background: 'var(--bg-input)' }} disabled>
+                  <option>No bookings available (Schedule one first!)</option>
+                </select>
+              )}
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">Gallery Title *</label>
+              <input
+                type="text"
+                className="form-input"
+                placeholder="e.g. Vasanthan & Priya Wedding Album"
+                value={newGalleryTitle}
+                onChange={(e) => setNewGalleryTitle(e.target.value)}
+                required
+              />
+            </div>
+
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={createProgress || availableBookings.length === 0}
+              style={{ padding: '0.85rem' }}
+            >
+              {createProgress ? 'Creating...' : 'Create Album'}
+            </button>
+          </form>
+        </div>
+      )}
+
+      {errorMsg && (
+        <div style={{
+          display: 'flex',
+          gap: '0.5rem',
+          backgroundColor: 'hsla(350, 80%, 60%, 0.15)',
+          border: '1px solid hsla(350, 80%, 60%, 0.3)',
+          borderRadius: 'var(--radius-sm)',
+          padding: '0.75rem 1rem',
+          marginBottom: '1.25rem',
+          color: 'var(--accent-red)',
+          fontSize: '0.85rem'
+        }}>
+          <AlertCircle size={18} style={{ flexShrink: 0 }} />
+          <span>{errorMsg}</span>
+        </div>
+      )}
+
+      {successMsg && (
+        <div style={{
+          display: 'flex',
+          gap: '0.5rem',
+          backgroundColor: 'hsla(150, 70%, 50%, 0.15)',
+          border: '1px solid hsla(150, 70%, 50%, 0.3)',
+          borderRadius: 'var(--radius-sm)',
+          padding: '0.75rem 1rem',
+          marginBottom: '1.25rem',
+          color: 'var(--accent-emerald)',
+          fontSize: '0.85rem'
+        }}>
+          <CheckCircle size={18} style={{ flexShrink: 0 }} />
+          <span>{successMsg}</span>
+        </div>
+      )}
+
+      {galleries.length === 0 && (
         <div style={{
           display: 'flex',
           flexDirection: 'column',
@@ -181,10 +369,17 @@ const PhotoUpload: React.FC = () => {
           textAlign: 'center'
         }}>
           <AlertCircle size={32} color="var(--accent-yellow)" style={{ marginBottom: '0.75rem' }} />
-          <h3 style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>No galleries active</h3>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', maxWidth: '450px', marginBottom: '1.25rem' }}>
-            Before uploading image assets, you must first publish a Delivery Gallery page for one of your bookings.
+          <h3 style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>No Galleries Created Yet</h3>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', maxWidth: '480px', marginBottom: '1.25rem' }}>
+            Before uploading image assets, you need to create a client delivery gallery folder using the form at the top.
           </p>
+          <button
+            onClick={() => setShowCreatePanel(true)}
+            className="btn btn-primary"
+            style={{ fontSize: '0.85rem' }}
+          >
+            Create Your First Gallery Now
+          </button>
         </div>
       )}
 
@@ -199,40 +394,6 @@ const PhotoUpload: React.FC = () => {
                 <Upload size={20} color="var(--accent-purple)" />
                 <span>Secure File Ingestion</span>
               </h2>
-
-              {errorMsg && (
-                <div style={{
-                  display: 'flex',
-                  gap: '0.5rem',
-                  backgroundColor: 'hsla(350, 80%, 60%, 0.15)',
-                  border: '1px solid hsla(350, 80%, 60%, 0.3)',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '0.75rem 1rem',
-                  marginBottom: '1.25rem',
-                  color: 'var(--accent-red)',
-                  fontSize: '0.85rem'
-                }}>
-                  <AlertCircle size={18} style={{ flexShrink: 0 }} />
-                  <span>{errorMsg}</span>
-                </div>
-              )}
-
-              {successMsg && (
-                <div style={{
-                  display: 'flex',
-                  gap: '0.5rem',
-                  backgroundColor: 'hsla(150, 70%, 50%, 0.15)',
-                  border: '1px solid hsla(150, 70%, 50%, 0.3)',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '0.75rem 1rem',
-                  marginBottom: '1.25rem',
-                  color: 'var(--accent-emerald)',
-                  fontSize: '0.85rem'
-                }}>
-                  <CheckCircle size={18} style={{ flexShrink: 0 }} />
-                  <span>{successMsg}</span>
-                </div>
-              )}
 
               <form onSubmit={handleUploadSubmit}>
                 
